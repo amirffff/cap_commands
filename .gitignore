@@ -1,0 +1,18 @@
+# Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdf
+
+# Environments
+venv/
+.venv/
+env/
+
+# VS Code / Cursor settings
+.vscode/
+.cursor/
+
+# Sensitive data
+.env
