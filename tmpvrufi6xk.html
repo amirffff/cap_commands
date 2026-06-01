@@ -1,0 +1,918 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <script>
+    window.CESIUM_BASE_URL = "https://unpkg.com/cesium@1.117/Build/Cesium/";
+  </script>
+  <link href="https://unpkg.com/cesium@1.117/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <style>
+    html, body, #map {
+      margin: 0; height: 100%; width: 100%;
+      background: #0d1117; overflow: hidden;
+      font-family: "Courier New", monospace;
+    }
+    #offlineBanner {
+      position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+      background: rgba(85,107,47,0.92); color: #f9e2af;
+      padding: 5px 14px; border-radius: 3px; z-index: 2000;
+      font: bold 11px "Courier New", monospace;
+      text-transform: uppercase; letter-spacing: 1px;
+      display: none; border: 1px solid rgba(249,226,175,0.4);
+    }
+    #radarHud {
+      position: fixed; top: 10px; right: 10px; z-index: 2100;
+      background: rgba(13,17,23,0.85);
+      border: 1px solid rgba(137,180,250,0.3);
+      border-radius: 6px; padding: 8px; pointer-events: none;
+    }
+    #coordOverlay {
+      position: fixed; bottom: 6px; left: 8px; z-index: 2100;
+      background: rgba(13,17,23,0.75);
+      border: 1px solid rgba(137,180,250,0.2);
+      border-radius: 4px; padding: 4px 8px;
+      font: 10px "Courier New", monospace;
+      color: #a6e3a1; text-transform: uppercase;
+      pointer-events: none;
+    }
+    #mapLegend {
+      position: fixed; bottom: 6px; right: 8px; z-index: 2100;
+      background: rgba(13,17,23,0.92);
+      border: 1px solid rgba(137,180,250,0.45);
+      border-radius: 6px; padding: 8px 10px;
+      font: 10px "Courier New", monospace;
+      color: #cdd6f4; line-height: 1.55;
+      max-width: 260px;
+      pointer-events: none;
+    }
+    #mapLegend .title {
+      font-weight: bold; color: #89b4fa;
+      text-transform: uppercase; letter-spacing: 1px;
+      margin-bottom: 6px; font-size: 11px;
+    }
+    #mapLegend .row { display: flex; align-items: center; margin: 3px 0; }
+    #mapLegend .sw {
+      width: 14px; height: 10px; margin-right: 8px;
+      border: 1px solid rgba(255,255,255,0.35); flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="offlineBanner">OFFLINE - IMAGERY/TERRAIN LIMITED</div>
+  <div id="map"></div>
+  <div id="radarHud"><canvas id="hudCanvas" width="180" height="220"></canvas></div>
+  <div id="coordOverlay">LAT ---.------ LON ---.------</div>
+  <div id="mapLegend">
+    <div class="title">Geometry legend</div>
+    <div class="row"><span class="sw" style="background:#89b4fa"></span>Platform / ENU axes</div>
+    <div class="row"><span class="sw" style="background:#ff8c00"></span>Camera FOV volume</div>
+    <div class="row"><span class="sw" style="background:#ffcc00"></span>FOV edges / boresight</div>
+    <div class="row"><span class="sw" style="background:#4da6ff"></span>Scan preview (continuous)</div>
+    <div class="row"><span class="sw" style="background:#00ff88"></span>Active scan beam</div>
+    <div class="row"><span class="sw" style="background:#f38ba8"></span>Aim point</div>
+  </div>
+  <script src="https://unpkg.com/cesium@1.117/Build/Cesium/Cesium.js"></script>
+  <script>
+    var status = {
+      engine: "CesiumJS 3D",
+      ready: false,
+      interactive: false,
+      online: navigator.onLine
+    };
+
+    function setOfflineBanner(online) {
+      document.getElementById("offlineBanner").style.display = online ? "none" : "block";
+      status.online = !!online;
+    }
+    window.addEventListener("online", function() { setOfflineBanner(true); });
+    window.addEventListener("offline", function() { setOfflineBanner(false); });
+    setOfflineBanner(navigator.onLine);
+
+    var platformState = {
+      lat: 32.0853, lon: 34.7818,
+      heading: 0, hfov: 24,
+      pitch: 0, vfov: 14,
+      nearDist: 100, centerDist: 600, farDist: 1200
+    };
+
+    var viewer = new Cesium.Viewer("map", {
+      animation: false,
+      timeline: false,
+      baseLayerPicker: false,
+      geocoder: false,
+      sceneModePicker: true,
+      navigationHelpButton: false,
+      infoBox: false,
+      fullscreenButton: false,
+      homeButton: false,
+      selectionIndicator: false,
+      shouldAnimate: true
+    });
+    viewer.scene.globe.depthTestAgainstTerrain = false;
+    viewer.scene.globe.show = true;
+    viewer.scene.skyAtmosphere.show = true;
+    viewer.scene.fog.enabled = false;
+
+    var camCtrl = viewer.scene.screenSpaceCameraController;
+    camCtrl.enableRotate = true;
+    camCtrl.enableTranslate = true;
+    camCtrl.enableZoom = true;
+    camCtrl.enableTilt = true;
+    camCtrl.enableLook = true;
+    camCtrl.rotateEventTypes = [
+      Cesium.CameraEventType.LEFT_DRAG,
+      Cesium.CameraEventType.PINCH
+    ];
+    camCtrl.tiltEventTypes = [Cesium.CameraEventType.RIGHT_DRAG];
+    camCtrl.zoomEventTypes = [
+      Cesium.CameraEventType.WHEEL,
+      Cesium.CameraEventType.PINCH
+    ];
+
+    var terrainImagery = new Cesium.UrlTemplateImageryProvider({
+      url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      maximumLevel: 19,
+      credit: new Cesium.Credit("OpenStreetMap")
+    });
+    var satelliteImagery = new Cesium.UrlTemplateImageryProvider({
+      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      maximumLevel: 19,
+      credit: new Cesium.Credit("Esri")
+    });
+
+    viewer.imageryLayers.removeAll();
+    var terrainLayer = viewer.imageryLayers.addImageryProvider(terrainImagery);
+    var satelliteLayer = viewer.imageryLayers.addImageryProvider(satelliteImagery);
+    satelliteLayer.show = false;
+
+    var platformEntity = viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(34.7818, 32.0853, 120.0),
+      point: {
+        pixelSize: 10,
+        color: Cesium.Color.fromCssColorString("#89b4fa"),
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 2
+      },
+      label: {
+        text: "PLATFORM",
+        font: "bold 12px Courier New",
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        fillColor: Cesium.Color.fromCssColorString("#d7e3fc"),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffset: new Cesium.Cartesian2(0, -16)
+      }
+    });
+    var targetEntity = viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(34.79, 32.09, 0.0),
+      point: {
+        pixelSize: 8,
+        color: Cesium.Color.fromCssColorString("#f38ba8"),
+        outlineColor: Cesium.Color.WHITE,
+        outlineWidth: 1.5
+      }
+    });
+    var headingEntity = viewer.entities.add({
+      polyline: {
+        positions: [],
+        width: 3,
+        material: Cesium.Color.fromCssColorString("#a6e3a1")
+      }
+    });
+    var beamEntity = viewer.entities.add({
+      polyline: {
+        positions: [],
+        width: 2,
+        material: Cesium.Color.fromCssColorString("#89b4fa").withAlpha(0.8)
+      }
+    });
+
+    /* 3D sensor frustum in local ENU (gimbal = origin, yaw/pitch + camera HFoV/VFoV) */
+    var fovSliceEntities = [];
+    var fovEdgeEntities = [];
+    var fovLabelEntities = [];
+    var NUM_FOV_SLICES = 8;
+    var SLICE_ALPHAS = [0.82, 0.68, 0.54, 0.40, 0.28, 0.18, 0.10, 0.05];
+    var SLICE_COLOR = "#ff8c00";
+    var EDGE_COLOR = "#ffcc00";
+    var showFovFill = true;
+
+    var axisEntities = [];
+    function updateOriginAxes(lat, lon, alt) {
+      axisEntities.forEach(function(e) { viewer.entities.remove(e); });
+      axisEntities = [];
+      var o = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+      var len = Math.max(80, platformState.nearDist * 0.35);
+      var dirs = [
+        { enu: [len, 0, 0], color: "#f38ba8", label: "E" },
+        { enu: [0, len, 0], color: "#a6e3a1", label: "N" },
+        { enu: [0, 0, len], color: "#89b4fa", label: "U" }
+      ];
+      dirs.forEach(function(d) {
+        var p2 = enuToWorld(lat, lon, alt, d.enu[0], d.enu[1], d.enu[2]);
+        axisEntities.push(viewer.entities.add({
+          polyline: {
+            positions: [o, p2],
+            width: 2,
+            material: Cesium.Color.fromCssColorString(d.color).withAlpha(0.95)
+          }
+        }));
+      });
+    }
+
+    var activeFrustumEdges = null;
+    var scanPreviewEntities = [];
+    var scanPathEntity = null;
+    var cameraViewMode = "globe";
+    var orbitBearing = 45;
+    var orbitPitch = -35;
+    var orbitRange = 2500;
+    var cesiumEngineReady = false;
+    platformState.alt = 120;
+
+    for (var si = 0; si < NUM_FOV_SLICES; si++) {
+      fovSliceEntities.push(viewer.entities.add({
+        polygon: {
+          hierarchy: new Cesium.PolygonHierarchy([]),
+          perPositionHeight: true,
+          material: Cesium.Color.fromCssColorString(SLICE_COLOR).withAlpha(SLICE_ALPHAS[si]),
+          outline: false
+        }
+      }));
+    }
+    for (var ei = 0; ei < 8; ei++) {
+      fovEdgeEntities.push(viewer.entities.add({
+        polyline: {
+          positions: [],
+          width: 3.5,
+          material: Cesium.Color.fromCssColorString(EDGE_COLOR).withAlpha(0.98)
+        }
+      }));
+    }
+
+    var boresightEntity = viewer.entities.add({
+      polyline: {
+        positions: [],
+        width: 4,
+        material: new Cesium.PolylineGlowMaterialProperty({
+          glowPower: 0.35,
+          color: Cesium.Color.fromCssColorString("#00ff88")
+        })
+      }
+    });
+
+    var lastLat = 32.0853;
+    var lastLon = 34.7818;
+    var lastHeading = 0.0;
+    var lastZoom = 12;
+
+    function destinationPoint(lat, lon, bearingDeg, distanceMeters) {
+      var R = 6378137.0;
+      var br = bearingDeg * Math.PI / 180.0;
+      var la = lat * Math.PI / 180.0;
+      var lo = lon * Math.PI / 180.0;
+      var d = distanceMeters / R;
+      var sla = Math.sin(la), cla = Math.cos(la);
+      var sd = Math.sin(d), cd = Math.cos(d);
+      var la2 = Math.asin(sla * cd + cla * sd * Math.cos(br));
+      var lo2 = lo + Math.atan2(Math.sin(br) * sd * cla, cd - sla * Math.sin(la2));
+      return [la2 * 180.0 / Math.PI, lo2 * 180.0 / Math.PI];
+    }
+
+    function buildArc(lat, lon, headingDeg, hfovDeg, distanceMeters) {
+      var half = Math.max(0.5, hfovDeg / 2.0);
+      var start = headingDeg - half;
+      var end = headingDeg + half;
+      var step = Math.max(1.0, hfovDeg / 16.0);
+      var points = [];
+      for (var b = start; b <= end + 0.001; b += step) {
+        points.push(destinationPoint(lat, lon, b, distanceMeters));
+      }
+      return points;
+    }
+
+    function buildFovPolygon(lat, lon, headingDeg, hfovDeg, nearDistance, farDistance) {
+      var outer = buildArc(lat, lon, headingDeg, hfovDeg, farDistance);
+      var inner = buildArc(lat, lon, headingDeg, hfovDeg, nearDistance).reverse();
+      return outer.concat(inner);
+    }
+
+    function enuOffset(headingDeg, pitchDeg, rangeM, deltaYawDeg, deltaPitchDeg) {
+      var br = Cesium.Math.toRadians(headingDeg + deltaYawDeg);
+      var el = Cesium.Math.toRadians(pitchDeg + deltaPitchDeg);
+      var cosEl = Math.cos(el);
+      return {
+        e: rangeM * cosEl * Math.sin(br),
+        n: rangeM * cosEl * Math.cos(br),
+        u: rangeM * Math.sin(el)
+      };
+    }
+
+    function enuToWorld(lat, lon, alt, east, north, up) {
+      var origin = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+      var transform = Cesium.Transforms.eastNorthUpToFixedFrame(origin);
+      var local = new Cesium.Cartesian3(east, north, up);
+      return Cesium.Matrix4.multiplyByPoint(transform, local, new Cesium.Cartesian3());
+    }
+
+    function sliceCornersWorld(lat, lon, alt, yaw, pitch, hfov, vfov, rangeM) {
+      var hf = hfov / 2.0;
+      var vf = vfov / 2.0;
+      var corners = [
+        enuOffset(yaw, pitch, rangeM, -hf, -vf),
+        enuOffset(yaw, pitch, rangeM, +hf, -vf),
+        enuOffset(yaw, pitch, rangeM, +hf, +vf),
+        enuOffset(yaw, pitch, rangeM, -hf, +vf)
+      ];
+      return corners.map(function(c) {
+        return enuToWorld(lat, lon, alt, c.e, c.n, c.u);
+      });
+    }
+
+    function clearFrustumLabels() {
+      fovLabelEntities.forEach(function(e) { viewer.entities.remove(e); });
+      fovLabelEntities = [];
+    }
+
+    /* Slant range along rays from altitude + elevation (pitch) in spherical model */
+    function sphericalNearFar(alt, pitchDeg, vfovDeg) {
+      var halfV = Math.max(0.5, vfovDeg / 2.0);
+      var pitchDown = Math.max(0.8, Math.abs(pitchDeg));
+      var depFar = Math.max(0.5, pitchDown - halfV) * Math.PI / 180.0;
+      var depNear = Math.min(89.0, pitchDown + halfV) * Math.PI / 180.0;
+      var farSlant = alt / Math.sin(depFar);
+      var nearSlant = alt / Math.sin(depNear);
+      if (nearSlant > farSlant) {
+        var tmp = nearSlant;
+        nearSlant = farSlant;
+        farSlant = tmp;
+      }
+      nearSlant = Math.max(40.0, Math.min(60000.0, nearSlant));
+      farSlant = Math.max(nearSlant + 20.0, Math.min(60000.0, farSlant));
+      return { near: nearSlant, far: farSlant };
+    }
+
+    function updateFrustum3D(yaw, pitch, hfov, vfov, nearD, farD) {
+      var lat = platformState.lat;
+      var lon = platformState.lon;
+      var alt = Math.max(10.0, platformState.alt || 120.0);
+      var apex = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+      var ranges = sphericalNearFar(alt, pitch, vfov);
+      nearD = ranges.near;
+      farD = ranges.far;
+      platformState.nearDist = nearD;
+      platformState.farDist = farD;
+
+      for (var s = 0; s < NUM_FOV_SLICES; s++) {
+        var t0 = s / NUM_FOV_SLICES;
+        var t1 = (s + 1) / NUM_FOV_SLICES;
+        var d0 = nearD + (farD - nearD) * t0;
+        var d1 = nearD + (farD - nearD) * t1;
+        var inner = sliceCornersWorld(lat, lon, alt, yaw, pitch, hfov, vfov, d0);
+        var outer = sliceCornersWorld(lat, lon, alt, yaw, pitch, hfov, vfov, d1);
+        fovSliceEntities[s].polygon.hierarchy = new Cesium.PolygonHierarchy(
+          [inner[0], inner[1], inner[2], inner[3], outer[3], outer[2], outer[1], outer[0]]
+        );
+        var alpha = showFovFill ? SLICE_ALPHAS[s] : 0.0;
+        fovSliceEntities[s].polygon.material = Cesium.Color.fromCssColorString(SLICE_COLOR)
+          .withAlpha(alpha);
+      }
+
+      var nearC = sliceCornersWorld(lat, lon, alt, yaw, pitch, hfov, vfov, nearD);
+      var farC = sliceCornersWorld(lat, lon, alt, yaw, pitch, hfov, vfov, farD);
+      var edgeSets = [
+        [apex, nearC[0]], [apex, nearC[1]], [apex, nearC[2]], [apex, nearC[3]],
+        [nearC[0], farC[0]], [nearC[1], farC[1]], [nearC[2], farC[2]], [nearC[3], farC[3]]
+      ];
+      for (var e = 0; e < 8; e++) {
+        fovEdgeEntities[e].polyline.positions = edgeSets[e];
+      }
+
+      var boreEnd = enuToWorld(lat, lon, alt,
+        enuOffset(yaw, pitch, farD, 0, 0).e,
+        enuOffset(yaw, pitch, farD, 0, 0).n,
+        enuOffset(yaw, pitch, farD, 0, 0).u
+      );
+      boresightEntity.polyline.positions = [apex, boreEnd];
+
+      clearFrustumLabels();
+      var hf = hfov / 2.0;
+      var vf = vfov / 2.0;
+      var labelSpecs = [
+        { dYaw: -hf, dPitch: 0, text: "YAW " + (yaw - hf).toFixed(1) + "°" },
+        { dYaw: +hf, dPitch: 0, text: "YAW " + (yaw + hf).toFixed(1) + "°" },
+        { dYaw: 0, dPitch: -vf, text: "PITCH " + (pitch - vf).toFixed(1) + "°" },
+        { dYaw: 0, dPitch: +vf, text: "PITCH " + (pitch + vf).toFixed(1) + "°" },
+        { dYaw: 0, dPitch: 0, text: "HFoV " + hfov.toFixed(1) + "°  VFoV " + vfov.toFixed(1) + "°" }
+      ];
+      labelSpecs.forEach(function(spec) {
+        var c = enuOffset(yaw, pitch, farD * 0.55, spec.dYaw, spec.dPitch);
+        fovLabelEntities.push(viewer.entities.add({
+          position: enuToWorld(lat, lon, alt, c.e, c.n, c.u),
+          label: {
+            text: spec.text,
+            font: "bold 13px Courier New",
+            fillColor: Cesium.Color.fromCssColorString("#ffeeaa"),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.CENTER
+          }
+        }));
+      });
+
+      updateOriginAxes(lat, lon, alt);
+    }
+
+    function zoomToHeight(zoomLevel) {
+      return 28000000.0 / Math.pow(2, Math.max(1.0, zoomLevel - 1.0));
+    }
+
+    function platformCartesian() {
+      return Cesium.Cartesian3.fromDegrees(
+        lastLon, lastLat, Math.max(10.0, platformState.alt || 120.0)
+      );
+    }
+
+    function applyOrbitCamera(durationSec) {
+      var pos = platformCartesian();
+      var range = Math.max(150.0, orbitRange);
+      viewer.camera.flyToBoundingSphere(
+        new Cesium.BoundingSphere(pos, 80.0),
+        {
+          duration: durationSec || 0.5,
+          offset: new Cesium.HeadingPitchRange(
+            Cesium.Math.toRadians(lastHeading + orbitBearing),
+            Cesium.Math.toRadians(orbitPitch),
+            range
+          )
+        }
+      );
+    }
+
+    function applySensorPovCamera() {
+      var pos = platformCartesian();
+      var hdg = Cesium.Math.toRadians(platformState.heading);
+      var pitchRad = Cesium.Math.toRadians(platformState.pitch);
+      viewer.camera.setView({
+        destination: pos,
+        orientation: { heading: hdg, pitch: pitchRad, roll: 0.0 }
+      });
+      updateFrustum3D(
+        platformState.heading, platformState.pitch,
+        platformState.hfov, platformState.vfov,
+        platformState.nearDist, platformState.farDist
+      );
+    }
+
+    function centerCamera(durationSec) {
+      if (cameraViewMode === "sensor") {
+        applySensorPovCamera();
+        return;
+      }
+      if (cameraViewMode === "orbit") {
+        applyOrbitCamera(durationSec);
+        return;
+      }
+      applyOrbitCamera(durationSec);
+    }
+
+    /* ---- Radar HUD overlay ---- */
+    function drawRadarHud() {
+      var cv = document.getElementById("hudCanvas");
+      var ctx = cv.getContext("2d");
+      var W = 180, H = 220;
+      ctx.clearRect(0, 0, W, H);
+      var s = platformState;
+      var cx = 80, cy = 85, r = 68;
+
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.strokeStyle = "rgba(137,180,250,0.35)"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.5, 0, 2 * Math.PI);
+      ctx.strokeStyle = "rgba(137,180,250,0.15)"; ctx.stroke();
+
+      for (var d = 0; d < 360; d += 30) {
+        var rad = (d - 90) * Math.PI / 180;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(rad) * (r - 6), cy + Math.sin(rad) * (r - 6));
+        ctx.lineTo(cx + Math.cos(rad) * r, cy + Math.sin(rad) * r);
+        ctx.strokeStyle = d % 90 === 0 ? "rgba(205,214,244,0.7)" : "rgba(205,214,244,0.35)";
+        ctx.lineWidth = d % 90 === 0 ? 1.5 : 1; ctx.stroke();
+      }
+
+      ctx.font = "bold 10px Courier New"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#cdd6f4";
+      ctx.fillText("N", cx, cy - r - 8); ctx.fillText("S", cx, cy + r + 8);
+      ctx.fillText("E", cx + r + 10, cy); ctx.fillText("W", cx - r - 10, cy);
+
+      var hRad = (s.heading - 90) * Math.PI / 180;
+      var halfF = s.hfov / 2 * Math.PI / 180;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r - 10, hRad - halfF, hRad + halfF); ctx.closePath();
+      ctx.fillStyle = "rgba(249,226,175,0.25)"; ctx.fill();
+      ctx.strokeStyle = "rgba(249,226,175,0.6)"; ctx.lineWidth = 1; ctx.stroke();
+
+      var hx = cx + Math.cos(hRad) * (r + 2), hy = cy + Math.sin(hRad) * (r + 2);
+      ctx.save(); ctx.shadowColor = "#a6e3a1"; ctx.shadowBlur = 6;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(hx, hy);
+      ctx.strokeStyle = "#a6e3a1"; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+
+      ctx.font = "10px Courier New"; ctx.fillStyle = "#a6e3a1"; ctx.textAlign = "center";
+      ctx.fillText("HDG " + s.heading.toFixed(1) + "°", cx, cy + r + 20);
+
+      var ex = 162, ey = 20, eH = 120, eW = 12;
+      ctx.strokeStyle = "rgba(137,180,250,0.3)"; ctx.lineWidth = 1; ctx.strokeRect(ex, ey, eW, eH);
+      var hzY = ey + eH / 2;
+      ctx.beginPath(); ctx.moveTo(ex - 2, hzY); ctx.lineTo(ex + eW + 2, hzY);
+      ctx.strokeStyle = "rgba(205,214,244,0.25)"; ctx.stroke();
+      var pNorm = (-s.pitch + 90) / 180, pY = ey + pNorm * eH;
+      var vN = s.vfov / 180 * eH;
+      ctx.fillStyle = "rgba(249,226,175,0.2)"; ctx.fillRect(ex, pY - vN / 2, eW, vN);
+      ctx.beginPath(); ctx.moveTo(ex - 2, pY); ctx.lineTo(ex + eW + 2, pY);
+      ctx.strokeStyle = "#f9e2af"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.font = "9px Courier New"; ctx.fillStyle = "#f9e2af"; ctx.textAlign = "center";
+      ctx.fillText("EL", ex + eW / 2, ey - 6);
+      ctx.fillText(s.pitch.toFixed(1) + "°", ex + eW / 2, ey + eH + 12);
+    }
+
+    function updateCoordOverlay() {
+      document.getElementById("coordOverlay").textContent =
+        "LAT " + platformState.lat.toFixed(6) + " LON " + platformState.lon.toFixed(6);
+    }
+
+    /* ---- Map API (preserved call signatures) ---- */
+    window.setMapLayer = function(mode) {
+      var sat = (mode || "").toLowerCase().startsWith("sat");
+      terrainLayer.show = !sat;
+      satelliteLayer.show = sat;
+    };
+
+    window.setMapZoom = function(level) {
+      if (!Number.isFinite(level)) return;
+      lastZoom = level;
+      centerCamera(0.45);
+    };
+
+    window.centerPlatform = function() {
+      centerCamera(0.55);
+    };
+
+    window.setCameraView = function(cfg) {
+      if (!cfg) return;
+      cameraViewMode = cfg.mode || "globe";
+      if (cfg.bearing !== undefined) orbitBearing = Number(cfg.bearing);
+      if (cfg.pitch !== undefined) orbitPitch = Number(cfg.pitch);
+      if (cfg.range !== undefined) orbitRange = Number(cfg.range);
+      if (cameraViewMode === "sensor") {
+        applySensorPovCamera();
+      } else {
+        applyOrbitCamera(0.45);
+      }
+    };
+
+    window.updatePlatform = function(payload) {
+      if (!payload) return;
+
+      var lat = Number(payload.lat);
+      var lon = Number(payload.lon);
+      var heading = Number(payload.heading);
+      var altitude = Math.max(10.0, Number(payload.alt || 50.0));
+      var hfov = Number(payload.hfov);
+      var nearDistance = Math.max(10.0, Number(payload.nearDistance || 100.0));
+      var centerDistance = Math.max(10.0, Number(payload.centerDistance || 120.0));
+      var farDistance = Math.max(nearDistance + 5.0, Number(payload.farDistance || 200.0));
+
+      lastLat = lat; lastLon = lon; lastHeading = heading;
+      platformState.lat = lat; platformState.lon = lon;
+      platformState.heading = heading; platformState.hfov = hfov;
+      platformState.pitch = Number(payload.pitch || 0);
+      platformState.vfov = Number(payload.vfov || 14);
+      platformState.alt = altitude;
+      platformState.nearDist = nearDistance;
+      platformState.centerDist = centerDistance;
+      platformState.farDist = farDistance;
+
+      var target = destinationPoint(lat, lon, heading, centerDistance);
+
+      updateFrustum3D(heading, platformState.pitch, hfov, platformState.vfov, nearDistance, farDistance);
+
+      var platformPos = Cesium.Cartesian3.fromDegrees(lon, lat, altitude);
+      var boreTip = enuToWorld(lat, lon, altitude,
+        enuOffset(heading, platformState.pitch, centerDistance, 0, 0).e,
+        enuOffset(heading, platformState.pitch, centerDistance, 0, 0).n,
+        enuOffset(heading, platformState.pitch, centerDistance, 0, 0).u
+      );
+      var targetPos = boreTip;
+      platformEntity.position = platformPos;
+      targetEntity.position = targetPos;
+
+      headingEntity.polyline.positions = [platformPos, targetPos];
+      beamEntity.polyline.positions = [platformPos, targetPos];
+
+      if (payload.label) {
+        platformEntity.label.text = payload.label;
+      }
+
+      drawRadarHud();
+      updateCoordOverlay();
+
+      if (payload.follow) {
+        centerCamera(0.4);
+      }
+    };
+
+    /* ---- 3D scan: continuous swept volume (one wedge per elevation row) ---- */
+    var scanTrailEntities = [];
+    var activeScanFrustumEdges = [];
+    var activeScanFrustumFill = [];
+
+    function clearActiveScanFrustum() {
+      activeScanFrustumEdges.forEach(function(e) { viewer.entities.remove(e); });
+      activeScanFrustumFill.forEach(function(e) { viewer.entities.remove(e); });
+      activeScanFrustumEdges = [];
+      activeScanFrustumFill = [];
+    }
+
+    function quadAt(lat, lon, alt, yawL, yawR, pitch, hfov, vfov, rangeM) {
+      var hf = hfov / 2.0;
+      var vf = vfov / 2.0;
+      return [
+        enuToWorld(lat, lon, alt, enuOffset(yawL, pitch - vf, rangeM, 0, 0).e,
+          enuOffset(yawL, pitch - vf, rangeM, 0, 0).n, enuOffset(yawL, pitch - vf, rangeM, 0, 0).u),
+        enuToWorld(lat, lon, alt, enuOffset(yawR, pitch - vf, rangeM, 0, 0).e,
+          enuOffset(yawR, pitch - vf, rangeM, 0, 0).n, enuOffset(yawR, pitch - vf, rangeM, 0, 0).u),
+        enuToWorld(lat, lon, alt, enuOffset(yawR, pitch + vf, rangeM, 0, 0).e,
+          enuOffset(yawR, pitch + vf, rangeM, 0, 0).n, enuOffset(yawR, pitch + vf, rangeM, 0, 0).u),
+        enuToWorld(lat, lon, alt, enuOffset(yawL, pitch + vf, rangeM, 0, 0).e,
+          enuOffset(yawL, pitch + vf, rangeM, 0, 0).n, enuOffset(yawL, pitch + vf, rangeM, 0, 0).u)
+      ];
+    }
+
+    function addPolylineEdges(pts, colorHex, width, alpha, store) {
+      var col = Cesium.Color.fromCssColorString(colorHex).withAlpha(alpha);
+      for (var i = 0; i < pts.length; i++) {
+        var j = (i + 1) % pts.length;
+        store.push(viewer.entities.add({
+          polyline: { positions: [pts[i], pts[j]], width: width, material: col }
+        }));
+      }
+    }
+
+    function loftRowToNext(nearA, farA, nearB, farB, colorHex, store) {
+      var col = Cesium.Color.fromCssColorString(colorHex).withAlpha(0.85);
+      for (var i = 0; i < 4; i++) {
+        store.push(viewer.entities.add({
+          polyline: { positions: [nearA[i], nearB[i]], width: 2.2, material: col }
+        }));
+        store.push(viewer.entities.add({
+          polyline: { positions: [farA[i], farB[i]], width: 2.2, material: col }
+        }));
+      }
+    }
+
+    function buildScanElevationRows(params) {
+      var az0 = Number(params.az_start);
+      var az1 = Number(params.az_end);
+      var el0 = Number(params.el_start);
+      var el1 = Number(params.el_end);
+      var vfov = Number(params.vfov || 14);
+      var base = Number(params.base_heading || 0);
+      var yawL = base + Math.min(az0, az1) - Number(params.hfov || 24) / 2.0;
+      var yawR = base + Math.max(az0, az1) + Number(params.hfov || 24) / 2.0;
+      var nPasses = Math.max(1, Math.ceil(Math.abs(el0 - el1) / Math.max(0.5, vfov)));
+      var rows = [];
+      for (var pass = 0; pass < nPasses; pass++) {
+        var el = el0 - pass * vfov;
+        if (el < el1) el = el1;
+        rows.push({ yawL: yawL, yawR: yawR, pitch: el, pass: pass });
+      }
+      return rows;
+    }
+
+    function drawContinuousScanRow(lat, lon, alt, row, hfov, vfov, fillStore, edgeStore) {
+      var ranges = sphericalNearFar(alt, row.pitch, vfov);
+      var nearQ = quadAt(lat, lon, alt, row.yawL, row.yawR, row.pitch, hfov, vfov, ranges.near);
+      var farQ = quadAt(lat, lon, alt, row.yawL, row.yawR, row.pitch, hfov, vfov, ranges.far);
+      var apex = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+
+      if (showFovFill) {
+        fillStore.push(viewer.entities.add({
+          polygon: {
+            hierarchy: new Cesium.PolygonHierarchy(
+              [nearQ[0], nearQ[1], nearQ[2], nearQ[3], farQ[3], farQ[2], farQ[1], farQ[0]]
+            ),
+            perPositionHeight: true,
+            material: Cesium.Color.fromCssColorString("#4da6ff").withAlpha(0.14),
+            outline: false
+          }
+        }));
+      }
+
+      addPolylineEdges(nearQ, "#6eb5ff", 2.8, 0.95, edgeStore);
+      addPolylineEdges(farQ, "#4da6ff", 2.8, 0.95, edgeStore);
+      for (var i = 0; i < 4; i++) {
+        edgeStore.push(viewer.entities.add({
+          polyline: {
+            positions: [apex, farQ[i]],
+            width: 1.6,
+            material: Cesium.Color.fromCssColorString("#4da6ff").withAlpha(0.45)
+          }
+        }));
+        edgeStore.push(viewer.entities.add({
+          polyline: {
+            positions: [nearQ[i], farQ[i]],
+            width: 2.4,
+            material: Cesium.Color.fromCssColorString("#89d4ff").withAlpha(0.9)
+          }
+        }));
+      }
+      return { nearQ: nearQ, farQ: farQ };
+    }
+
+    function drawActiveScanBeam(lat, lon, alt, yaw, pitch, hfov, vfov) {
+      var ranges = sphericalNearFar(alt, pitch, vfov);
+      var nearD = ranges.near;
+      var farD = ranges.far;
+      var apex = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+      var nearC = sliceCornersWorld(lat, lon, alt, yaw, pitch, hfov, vfov, nearD);
+      var farC = sliceCornersWorld(lat, lon, alt, yaw, pitch, hfov, vfov, farD);
+
+      if (showFovFill) {
+        activeScanFrustumFill.push(viewer.entities.add({
+          polygon: {
+            hierarchy: new Cesium.PolygonHierarchy(
+              [nearC[0], nearC[1], nearC[2], nearC[3], farC[3], farC[2], farC[1], farC[0]]
+            ),
+            perPositionHeight: true,
+            material: Cesium.Color.fromCssColorString("#00ff88").withAlpha(0.12),
+            outline: false
+          }
+        }));
+      }
+
+      addPolylineEdges(nearC, "#00ff88", 3.2, 0.98, activeScanFrustumEdges);
+      addPolylineEdges(farC, "#00ffaa", 3.2, 0.98, activeScanFrustumEdges);
+      var edgePairs = [
+        [apex, nearC[0]], [apex, nearC[1]], [apex, nearC[2]], [apex, nearC[3]],
+        [nearC[0], farC[0]], [nearC[1], farC[1]], [nearC[2], farC[2]], [nearC[3], farC[3]]
+      ];
+      var edgeCol = Cesium.Color.fromCssColorString("#00ff88").withAlpha(0.95);
+      edgePairs.forEach(function(pair) {
+        activeScanFrustumEdges.push(viewer.entities.add({
+          polyline: { positions: pair, width: 3.5, material: edgeCol }
+        }));
+      });
+      return farD;
+    }
+
+    window.updateScanProgress = function(payload) {
+      if (!payload) return;
+      var lat = Number(payload.lat || platformState.lat);
+      var lon = Number(payload.lon || platformState.lon);
+      var alt = Math.max(10, Number(payload.alt || platformState.alt || 120));
+      var el = Number(payload.el);
+      var yaw = (payload.boresightHeading != null)
+        ? Number(payload.boresightHeading)
+        : (Number(payload.base_heading || 0) + Number(payload.az || 0));
+      var hfov = Number(payload.hfov || platformState.hfov);
+      var vfov = Number(payload.vfov || platformState.vfov);
+
+      clearActiveScanFrustum();
+      var farD = drawActiveScanBeam(lat, lon, alt, yaw, el, hfov, vfov);
+
+      var tip = enuToWorld(lat, lon, alt,
+        enuOffset(yaw, el, farD, 0, 0).e,
+        enuOffset(yaw, el, farD, 0, 0).n,
+        enuOffset(yaw, el, farD, 0, 0).u
+      );
+      scanTrailEntities.push(viewer.entities.add({
+        position: tip,
+        point: {
+          pixelSize: 6,
+          color: Cesium.Color.fromCssColorString("#00ff88"),
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 1
+        }
+      }));
+      if (scanTrailEntities.length > 400) {
+        viewer.entities.remove(scanTrailEntities.shift());
+      }
+    };
+
+    window.clearScanOverlay = function() {
+      scanTrailEntities.forEach(function(e) { viewer.entities.remove(e); });
+      scanTrailEntities = [];
+      clearActiveScanFrustum();
+      window.hideScanAreaPreview();
+    };
+
+    window.hideScanAreaPreview = function() {
+      scanPreviewEntities.forEach(function(e) { viewer.entities.remove(e); });
+      scanPreviewEntities = [];
+      if (scanPathEntity) {
+        viewer.entities.remove(scanPathEntity);
+        scanPathEntity = null;
+      }
+    };
+
+    window.showScanAreaPreview = function(params) {
+      if (!params) return;
+      window.hideScanAreaPreview();
+      var lat = Number(params.lat);
+      var lon = Number(params.lon);
+      var alt = Math.max(10, Number(params.alt || 120));
+      var hfov = Number(params.hfov || 24);
+      var vfov = Number(params.vfov || 14);
+
+      var rows = buildScanElevationRows(params);
+      var prev = null;
+      var pathPts = [];
+      rows.forEach(function(row) {
+        var q = drawContinuousScanRow(lat, lon, alt, row, hfov, vfov, scanPreviewEntities, scanPreviewEntities);
+        if (prev) {
+          loftRowToNext(prev.nearQ, prev.farQ, q.nearQ, q.farQ, "#5a9fd4", scanPreviewEntities);
+        }
+        var midYaw = (row.yawL + row.yawR) / 2.0;
+        var rowRanges = sphericalNearFar(alt, row.pitch, vfov);
+        var c = enuOffset(midYaw, row.pitch, rowRanges.far * 0.92, 0, 0);
+        pathPts.push(enuToWorld(lat, lon, alt, c.e, c.n, c.u));
+        prev = q;
+      });
+
+      if (pathPts.length >= 2) {
+        scanPathEntity = viewer.entities.add({
+          polyline: {
+            positions: pathPts,
+            width: 3,
+            material: new Cesium.PolylineGlowMaterialProperty({
+              glowPower: 0.25,
+              color: Cesium.Color.fromCssColorString("#4da6ff")
+            })
+          }
+        });
+      }
+    };
+
+    window.setLegendVisible = function(visible) {
+      var el = document.getElementById("mapLegend");
+      if (el) el.style.display = visible ? "block" : "none";
+    };
+
+    window.setFovFillVisible = function(visible) {
+      showFovFill = !!visible;
+      if (platformState.lat) {
+        updateFrustum3D(
+          platformState.heading, platformState.pitch,
+          platformState.hfov, platformState.vfov,
+          platformState.nearDist, platformState.farDist
+        );
+      }
+    };
+
+    window.waitForMapReady = function(timeoutMs) {
+      timeoutMs = timeoutMs || 8000;
+      return new Promise(function(resolve) {
+        if (cesiumEngineReady) { resolve(true); return; }
+        var done = false;
+        var timer = setTimeout(function() {
+          if (!done) { done = true; resolve(cesiumEngineReady); }
+        }, timeoutMs);
+        var remove = viewer.scene.globe.tileLoadProgressEvent.addEventListener(function(q) {
+          if (q === 0 && !done) {
+            done = true;
+            clearTimeout(timer);
+            cesiumEngineReady = true;
+            status.ready = true;
+            status.interactive = true;
+            resolve(true);
+          }
+        });
+        setTimeout(function() {
+          if (!cesiumEngineReady) {
+            cesiumEngineReady = true;
+            status.ready = true;
+            status.interactive = true;
+          }
+        }, 2500);
+      });
+    };
+
+    cesiumEngineReady = true;
+    status.ready = true;
+    status.interactive = true;
+    centerCamera(0.15);
+
+    window.getMapStatus = function() {
+      return {
+        engine: status.engine,
+        ready: status.ready && cesiumEngineReady,
+        interactive: status.interactive && cesiumEngineReady,
+        online: navigator.onLine
+      };
+    };
+  </script>
+</body>
+</html>

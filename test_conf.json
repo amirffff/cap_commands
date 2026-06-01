@@ -1,0 +1,84 @@
+{
+    "metadata": {
+        "created": "2026-05-27T10:51:30.500381",
+        "application": "Captrack Configuration Tool",
+        "version": "2.0",
+        "num_axes": 2,
+        "customer": "test",
+        "project": "project test"
+    },
+    "system": {
+        "pc_com": "TTL",
+        "ts_com_type": "CAN",
+        "can_baud_rate": "1M",
+        "com_axes_ts": 1,
+        "reversed_imu": "client",
+        "imu_com": "None",
+        "imu_baud_rate": 115200,
+        "imu_freq": 100,
+        "system_type": "manual",
+        "firmware_version": "2.25.00\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000",
+        "serial_number": 2401281,
+        "controller_ip": [
+            192,
+            168,
+            10,
+            86
+        ],
+        "controller_port": 4949,
+        "controller_subnet": [
+            255,
+            255,
+            255,
+            0
+        ],
+        "multi_com": [
+            "Ethernet",
+            "RS232"
+        ]
+    },
+    "axis_1": {
+        "motor_type": "Stepper",
+        "gear_ratio": 30.0,
+        "max_vdc": 52.8,
+        "peak_current": 10.0,
+        "slow_loop_sampling": 0.0008,
+        "micro_steps": 256,
+        "steps_per_rev": 200,
+        "close_loop_enable": "Disabled",
+        "encoder_lines": 2048.0,
+        "load_encoder_lines": 50.0,
+        "encoder_location": "Motor",
+        "apos_load_type": "Apos_load",
+        "biss_resolution": 0,
+        "biss_com": "None",
+        "abs_enc_offset": 0.0,
+        "abs_enc_reverse": 0,
+        "max_speed": 30.0,
+        "min_speed": 0.01,
+        "max_acceleration": 5700.0,
+        "min_acceleration": 1.0
+    },
+    "axis_2": {
+        "motor_type": "Stepper",
+        "gear_ratio": 30.0,
+        "max_vdc": 52.8,
+        "peak_current": 10.0,
+        "slow_loop_sampling": 0.0008,
+        "micro_steps": 256,
+        "steps_per_rev": 200,
+        "close_loop_enable": "Disabled",
+        "encoder_lines": 2048.0,
+        "load_encoder_lines": 50.0,
+        "encoder_location": "Motor",
+        "apos_load_type": "Apos_load",
+        "biss_resolution": 0,
+        "biss_com": "None",
+        "abs_enc_offset": 0.0,
+        "abs_enc_reverse": 0,
+        "max_speed": 21.13,
+        "min_speed": 2.5,
+        "max_acceleration": 5700.0,
+        "min_acceleration": 1.0
+    }
+}

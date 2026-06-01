@@ -1,0 +1,484 @@
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body, #map {
+      margin: 0; height: 100%; width: 100%;
+      background: #0d1117; color: #d7e3fc;
+      font-family: "Courier New", monospace;
+    }
+    .leaflet-control-attribution {
+      background: rgba(13,17,23,0.72) !important;
+      color: #b8c4db !important;
+      border-top: 1px solid rgba(137,180,250,0.35);
+      font-family: "Courier New", monospace;
+    }
+    .leaflet-control-attribution a { color: #89b4fa !important; }
+    .leaflet-tooltip {
+      background: rgba(17,24,39,0.95); color: #d7e3fc;
+      border: 1px solid #89b4fa; border-radius: 6px;
+      font-weight: 600; font-family: "Courier New", monospace;
+      text-transform: uppercase;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+    }
+    #offlineBanner {
+      position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
+      background: rgba(85,107,47,0.92); color: #f9e2af;
+      padding: 5px 14px; border-radius: 3px; z-index: 1000;
+      font: bold 11px "Courier New", monospace;
+      text-transform: uppercase; letter-spacing: 1px;
+      display: none; border: 1px solid rgba(249,226,175,0.4);
+    }
+    #radarHud {
+      position: fixed; top: 10px; right: 10px; z-index: 1100;
+      background: rgba(13,17,23,0.85);
+      border: 1px solid rgba(137,180,250,0.3);
+      border-radius: 6px; padding: 8px; pointer-events: none;
+    }
+    #coordOverlay {
+      position: fixed; bottom: 26px; left: 8px; z-index: 1100;
+      background: rgba(13,17,23,0.75);
+      border: 1px solid rgba(137,180,250,0.2);
+      border-radius: 4px; padding: 4px 8px;
+      font: 10px "Courier New", monospace;
+      color: #a6e3a1; text-transform: uppercase;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="offlineBanner">OFFLINE - MAP TILES UNAVAILABLE</div>
+  <div id="map"></div>
+  <div id="radarHud"><canvas id="hudCanvas" width="180" height="220"></canvas></div>
+  <div id="coordOverlay">LAT ---.------ LON ---.------</div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    var status = {
+      engine: "Leaflet 2D",
+      ready: false,
+      interactive: false,
+      online: navigator.onLine
+    };
+
+    function setOfflineBanner(online) {
+      document.getElementById("offlineBanner").style.display = online ? "none" : "block";
+      status.online = !!online;
+    }
+    window.addEventListener("online", function() { setOfflineBanner(true); });
+    window.addEventListener("offline", function() { setOfflineBanner(false); });
+    setOfflineBanner(navigator.onLine);
+
+    var terrainLayer = L.tileLayer(
+      "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+      { maxZoom: 17, attribution: "&copy; OpenTopoMap, OpenStreetMap contributors" }
+    );
+    var satelliteLayer = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 19, attribution: "Tiles &copy; Esri" }
+    );
+
+    var map = L.map("map", {
+      zoomControl: true,
+      preferCanvas: true,
+      layers: [terrainLayer]
+    }).setView([32.0853, 34.7818], 12);
+
+    var platformMarker = L.circleMarker([32.0853, 34.7818], {
+      radius: 8, color: "#89b4fa", weight: 2,
+      fillColor: "#89b4fa", fillOpacity: 0.95
+    }).addTo(map);
+
+    var headingLine = L.polyline([[32.0853, 34.7818], [32.09, 34.79]], {
+      color: "#a6e3a1", weight: 3, opacity: 0.95
+    }).addTo(map);
+
+    var targetMarker = L.circleMarker([32.09, 34.79], {
+      radius: 6, color: "#f38ba8", weight: 2,
+      fillColor: "#f38ba8", fillOpacity: 0.95
+    }).addTo(map);
+
+    var fovPolygon = L.polygon([], {
+      color: "#f9e2af", weight: 1, opacity: 0.4,
+      fillColor: "#f9e2af", fillOpacity: 0.0
+    }).addTo(map);
+    var nearArc = L.polyline([], {
+      color: "#fab387", weight: 2, opacity: 0.9, dashArray: "5,6"
+    }).addTo(map);
+    var farArc = L.polyline([], {
+      color: "#89b4fa", weight: 2, opacity: 0.9, dashArray: "4,7"
+    }).addTo(map);
+    var centerArc = L.polyline([], {
+      color: "#f9e2af", weight: 1.5, opacity: 0.6, dashArray: "3,5"
+    }).addTo(map);
+
+    var activeLayer = "terrain";
+    var platformState = {
+      lat: 32.0853, lon: 34.7818,
+      heading: 0.0, hfov: 24.0,
+      pitch: 0.0, vfov: 14.0,
+      nearDist: 100, centerDist: 600, farDist: 1200
+    };
+
+    function destinationPoint(lat, lon, bearingDeg, distanceMeters) {
+      var R = 6378137.0;
+      var br = bearingDeg * Math.PI / 180.0;
+      var la = lat * Math.PI / 180.0;
+      var lo = lon * Math.PI / 180.0;
+      var d = distanceMeters / R;
+      var sla = Math.sin(la), cla = Math.cos(la);
+      var sd = Math.sin(d), cd = Math.cos(d);
+      var la2 = Math.asin(sla * cd + cla * sd * Math.cos(br));
+      var lo2 = lo + Math.atan2(Math.sin(br) * sd * cla, cd - sla * Math.sin(la2));
+      return [la2 * 180.0 / Math.PI, lo2 * 180.0 / Math.PI];
+    }
+
+    function buildArc(lat, lon, headingDeg, hfovDeg, distanceMeters) {
+      var half = Math.max(0.5, hfovDeg / 2.0);
+      var start = headingDeg - half;
+      var end = headingDeg + half;
+      var step = Math.max(1.0, hfovDeg / 16.0);
+      var points = [];
+      for (var b = start; b <= end + 0.001; b += step) {
+        points.push(destinationPoint(lat, lon, b, distanceMeters));
+      }
+      return points;
+    }
+
+    function buildFovPolygon(lat, lon, headingDeg, hfovDeg, nearDistance, farDistance) {
+      var outer = buildArc(lat, lon, headingDeg, hfovDeg, farDistance);
+      var inner = buildArc(lat, lon, headingDeg, hfovDeg, nearDistance).reverse();
+      return outer.concat(inner);
+    }
+
+    /* ---- Canvas gradient FOV overlay ---- */
+    var fovCanvas = document.createElement("canvas");
+    fovCanvas.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;z-index:450;";
+    map.getPane("overlayPane").appendChild(fovCanvas);
+
+    function redrawFovGradient() {
+      var sz = map.getSize();
+      fovCanvas.width = sz.x;
+      fovCanvas.height = sz.y;
+      var ctx = fovCanvas.getContext("2d");
+      ctx.clearRect(0, 0, sz.x, sz.y);
+      var s = platformState;
+      var polyLL = buildFovPolygon(s.lat, s.lon, s.heading, s.hfov, s.nearDist, s.farDist);
+      if (!polyLL.length) return;
+      var org = map.latLngToContainerPoint([s.lat, s.lon]);
+      var polyPx = polyLL.map(function(p) { return map.latLngToContainerPoint(p); });
+      var maxR = 10;
+      polyPx.forEach(function(p) {
+        var d = Math.hypot(p.x - org.x, p.y - org.y);
+        if (d > maxR) maxR = d;
+      });
+      var grad = ctx.createRadialGradient(org.x, org.y, 0, org.x, org.y, maxR);
+      grad.addColorStop(0,    "rgba(249,226,175,0.68)");
+      grad.addColorStop(0.22, "rgba(249,226,175,0.48)");
+      grad.addColorStop(0.50, "rgba(249,226,175,0.26)");
+      grad.addColorStop(0.78, "rgba(249,226,175,0.12)");
+      grad.addColorStop(1,    "rgba(249,226,175,0.03)");
+      ctx.beginPath();
+      polyPx.forEach(function(p, i) { i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = "rgba(250,179,135,0.95)";
+      ctx.stroke();
+
+      /* scan lines inside the FOV cone */
+      ctx.strokeStyle = "rgba(249,226,175,0.10)";
+      ctx.lineWidth = 1;
+      for (var i = 0; i <= 4; i++) {
+        var a = s.heading - s.hfov / 2 + s.hfov * i / 4;
+        var fp = map.latLngToContainerPoint(destinationPoint(s.lat, s.lon, a, s.farDist));
+        ctx.beginPath();
+        ctx.moveTo(org.x, org.y);
+        ctx.lineTo(fp.x, fp.y);
+        ctx.stroke();
+      }
+
+      /* concentric range rings with distance labels */
+      var rings = [
+        { d: s.nearDist,   lbl: "NEAR", c: "rgba(250,179,135,0.70)" },
+        { d: s.centerDist, lbl: "CTR",  c: "rgba(249,226,175,0.60)" },
+        { d: s.farDist,    lbl: "FAR",  c: "rgba(137,180,250,0.70)" }
+      ];
+      rings.forEach(function(ring) {
+        var arc = buildArc(s.lat, s.lon, s.heading, s.hfov, ring.d)
+          .map(function(p) { return map.latLngToContainerPoint(p); });
+        if (!arc.length) return;
+        ctx.beginPath();
+        arc.forEach(function(p, idx) { idx ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+        ctx.strokeStyle = ring.c;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        var mid = arc[Math.floor(arc.length / 2)];
+        ctx.font = "10px Courier New";
+        ctx.fillStyle = ring.c;
+        ctx.fillText(ring.lbl + " " + Math.round(ring.d) + "m", mid.x + 4, mid.y - 4);
+      });
+    }
+    map.on("move zoom viewreset resize", redrawFovGradient);
+
+    /* ---- Radar HUD overlay ---- */
+    function drawRadarHud() {
+      var cv = document.getElementById("hudCanvas");
+      var ctx = cv.getContext("2d");
+      var W = 180, H = 220;
+      ctx.clearRect(0, 0, W, H);
+      var s = platformState;
+      var cx = 80, cy = 85, r = 68;
+
+      /* compass ring */
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.strokeStyle = "rgba(137,180,250,0.35)"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r * 0.5, 0, 2 * Math.PI);
+      ctx.strokeStyle = "rgba(137,180,250,0.15)"; ctx.stroke();
+
+      /* degree ticks every 30 deg */
+      for (var d = 0; d < 360; d += 30) {
+        var rad = (d - 90) * Math.PI / 180;
+        var r1 = r - 6, r2 = r;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(rad) * r1, cy + Math.sin(rad) * r1);
+        ctx.lineTo(cx + Math.cos(rad) * r2, cy + Math.sin(rad) * r2);
+        ctx.strokeStyle = d % 90 === 0 ? "rgba(205,214,244,0.7)" : "rgba(205,214,244,0.35)";
+        ctx.lineWidth = d % 90 === 0 ? 1.5 : 1;
+        ctx.stroke();
+      }
+
+      /* cardinal labels */
+      ctx.font = "bold 10px Courier New";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = "#cdd6f4";
+      ctx.fillText("N", cx, cy - r - 8);
+      ctx.fillText("S", cx, cy + r + 8);
+      ctx.fillText("E", cx + r + 10, cy);
+      ctx.fillText("W", cx - r - 10, cy);
+
+      /* HFoV arc wedge */
+      var hRad = (s.heading - 90) * Math.PI / 180;
+      var halfF = s.hfov / 2 * Math.PI / 180;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r - 10, hRad - halfF, hRad + halfF);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(249,226,175,0.25)"; ctx.fill();
+      ctx.strokeStyle = "rgba(249,226,175,0.6)"; ctx.lineWidth = 1; ctx.stroke();
+
+      /* heading line with glow */
+      var hx = cx + Math.cos(hRad) * (r + 2);
+      var hy = cy + Math.sin(hRad) * (r + 2);
+      ctx.save();
+      ctx.shadowColor = "#a6e3a1"; ctx.shadowBlur = 6;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(hx, hy);
+      ctx.strokeStyle = "#a6e3a1"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+
+      /* heading readout */
+      ctx.font = "10px Courier New"; ctx.fillStyle = "#a6e3a1";
+      ctx.textAlign = "center";
+      ctx.fillText("HDG " + s.heading.toFixed(1) + "°", cx, cy + r + 20);
+
+      /* elevation bar (right side) */
+      var ex = 162, ey = 20, eH = 120, eW = 12;
+      ctx.strokeStyle = "rgba(137,180,250,0.3)"; ctx.lineWidth = 1;
+      ctx.strokeRect(ex, ey, eW, eH);
+      /* horizon line */
+      var hzY = ey + eH / 2;
+      ctx.beginPath(); ctx.moveTo(ex - 2, hzY); ctx.lineTo(ex + eW + 2, hzY);
+      ctx.strokeStyle = "rgba(205,214,244,0.25)"; ctx.stroke();
+      /* pitch marker:  -90 bottom, 0 center, +90 top */
+      var pNorm = (-s.pitch + 90) / 180;
+      var pY = ey + pNorm * eH;
+      var vN = s.vfov / 180 * eH;
+      ctx.fillStyle = "rgba(249,226,175,0.2)";
+      ctx.fillRect(ex, pY - vN / 2, eW, vN);
+      ctx.beginPath(); ctx.moveTo(ex - 2, pY); ctx.lineTo(ex + eW + 2, pY);
+      ctx.strokeStyle = "#f9e2af"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.font = "9px Courier New"; ctx.fillStyle = "#f9e2af"; ctx.textAlign = "center";
+      ctx.fillText("EL", ex + eW / 2, ey - 6);
+      ctx.fillText(s.pitch.toFixed(1) + "°", ex + eW / 2, ey + eH + 12);
+    }
+
+    /* ---- Coordinate overlay ---- */
+    function updateCoordOverlay() {
+      document.getElementById("coordOverlay").textContent =
+        "LAT " + platformState.lat.toFixed(6) + " LON " + platformState.lon.toFixed(6);
+    }
+
+    /* ---- Map API (preserved call signatures) ---- */
+    window.setMapLayer = function(mode) {
+      var normalized = (mode || "").toLowerCase();
+      if (normalized === activeLayer) return;
+      if (activeLayer === "satellite") {
+        map.removeLayer(satelliteLayer);
+      } else {
+        map.removeLayer(terrainLayer);
+      }
+      if (normalized === "satellite") {
+        satelliteLayer.addTo(map);
+        activeLayer = "satellite";
+      } else {
+        terrainLayer.addTo(map);
+        activeLayer = "terrain";
+      }
+    };
+
+    window.setMapZoom = function(level) {
+      if (Number.isFinite(level)) {
+        map.setZoom(level);
+      }
+    };
+
+    window.centerPlatform = function() {
+      map.panTo([platformState.lat, platformState.lon], { animate: true, duration: 0.35 });
+    };
+
+    function resolveBoresightHeading(payload) {
+      if (payload && payload.boresightHeading != null) {
+        return Number(payload.boresightHeading);
+      }
+      if (payload && payload.heading != null) {
+        return Number(payload.heading);
+      }
+      return Number(platformState.heading);
+    }
+
+    function resolveBoresightDistance(payload) {
+      if (payload && payload.boresightDistance != null) {
+        return Math.max(10.0, Number(payload.boresightDistance));
+      }
+      if (payload && payload.centerDistance != null) {
+        return Math.max(10.0, Number(payload.centerDistance));
+      }
+      return Math.max(10.0, Number(platformState.centerDist));
+    }
+
+    window.updatePlatform = function(payload) {
+      if (!payload) return;
+
+      platformState.lat = Number(payload.lat);
+      platformState.lon = Number(payload.lon);
+      platformState.heading = resolveBoresightHeading(payload);
+      platformState.hfov = Number(payload.hfov);
+      platformState.pitch = Number(payload.pitch || 0);
+      platformState.vfov = Number(payload.vfov || 14);
+      var nearDistance = Math.max(10.0, Number(payload.nearDistance || 100.0));
+      var centerDistance = resolveBoresightDistance(payload);
+      var farDistance = Math.max(nearDistance + 5.0, Number(payload.farDistance || 200.0));
+      platformState.nearDist = nearDistance;
+      platformState.centerDist = centerDistance;
+      platformState.farDist = farDistance;
+
+      var center = [platformState.lat, platformState.lon];
+      platformMarker.setLatLng(center);
+      if (payload.label) {
+        platformMarker.bindTooltip(payload.label, { permanent: false, direction: "top" });
+      }
+
+      var headingTip = destinationPoint(
+        platformState.lat, platformState.lon,
+        platformState.heading, centerDistance
+      );
+      headingLine.setLatLngs([center, headingTip]);
+      targetMarker.setLatLng(headingTip);
+      if (payload.targetLabel) {
+        targetMarker.bindTooltip(payload.targetLabel, { permanent: false, direction: "right" });
+      }
+
+      var poly = buildFovPolygon(
+        platformState.lat, platformState.lon,
+        platformState.heading, platformState.hfov,
+        nearDistance, farDistance
+      );
+      fovPolygon.setLatLngs(poly);
+      nearArc.setLatLngs(buildArc(platformState.lat, platformState.lon, platformState.heading, platformState.hfov, nearDistance));
+      centerArc.setLatLngs(buildArc(platformState.lat, platformState.lon, platformState.heading, platformState.hfov, centerDistance));
+      farArc.setLatLngs(buildArc(platformState.lat, platformState.lon, platformState.heading, platformState.hfov, farDistance));
+
+      redrawFovGradient();
+      drawRadarHud();
+      updateCoordOverlay();
+
+      if (payload.follow) {
+        map.panTo(center, { animate: true, duration: 0.25 });
+      }
+    };
+
+    map.on("move zoom resize", function() { redrawFovGradient(); });
+
+    /* ---- Scan progress overlay ---- */
+    var scanMarkers = [];
+    var scanBeamMarker = null;
+
+    window.updateScanProgress = function(payload) {
+      if (!payload) return;
+      var el = Number(payload.el);
+      var hdg = resolveBoresightHeading(payload);
+      var dist = resolveBoresightDistance(payload);
+      var pt = destinationPoint(platformState.lat, platformState.lon, hdg, dist);
+      if (scanBeamMarker) {
+        scanBeamMarker.setLatLng(pt);
+      } else {
+        scanBeamMarker = L.circleMarker(pt, {
+          radius: 5, color: "#f9e2af", weight: 2,
+          fillColor: "#f9e2af", fillOpacity: 0.9
+        }).addTo(map);
+      }
+      var trail = L.circleMarker(pt, {
+        radius: 2, color: "#a6e3a1", weight: 0,
+        fillColor: "#a6e3a1", fillOpacity: 0.6
+      }).addTo(map);
+      scanMarkers.push(trail);
+    };
+
+    window.clearScanOverlay = function() {
+      scanMarkers.forEach(function(m) { map.removeLayer(m); });
+      scanMarkers.length = 0;
+      if (scanBeamMarker) { map.removeLayer(scanBeamMarker); scanBeamMarker = null; }
+    };
+
+    var scanPreviewLayer = null;
+    window.hideScanAreaPreview = function() {
+      if (scanPreviewLayer) { map.removeLayer(scanPreviewLayer); scanPreviewLayer = null; }
+    };
+    window.showScanAreaPreview = function(params) {
+      if (!params) return;
+      window.hideScanAreaPreview();
+      var lat = Number(params.lat), lon = Number(params.lon), alt = Number(params.alt || 120);
+      var base = Number(params.base_heading || 0);
+      var az0 = Number(params.az_start), az1 = Number(params.az_end);
+      var el0 = Number(params.el_start), el1 = Number(params.el_end);
+      var azMid = base + (az0 + az1) / 2, azSpan = Math.abs(az1 - az0);
+      var distTop = alt / Math.tan(Math.max(0.8, Math.abs(el0)) * Math.PI / 180);
+      var distBot = alt / Math.tan(Math.max(0.8, Math.abs(el1)) * Math.PI / 180);
+      var arcTop = buildArc(lat, lon, azMid, Math.max(azSpan, 10), distTop);
+      var arcBot = buildArc(lat, lon, azMid, Math.max(azSpan, 10), distBot).reverse();
+      scanPreviewLayer = L.polygon(arcTop.concat(arcBot), {
+        color: "#89b4fa", weight: 3, dashArray: "8,6",
+        fillColor: "#89b4fa", fillOpacity: 0.2
+      }).addTo(map);
+    };
+    window.waitForMapReady = function() { return Promise.resolve(true); };
+    window.setCameraView = function() {};
+
+    status.ready = true;
+    status.interactive = true;
+    window.getMapStatus = function() {
+      return {
+        engine: status.engine,
+        ready: status.ready,
+        interactive: status.interactive,
+        online: navigator.onLine
+      };
+    };
+  </script>
+</body>
+</html>

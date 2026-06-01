@@ -179,14 +179,32 @@ class Controller:
             Response bytes or None if error
 
         """
-        # Handle list of integers (binary packet)
-        #print('packet sent: ' + ", ".join([hex(i) for i in command])) # for debugging
-        if isinstance(command, list):
-            self.socket.sendall(bytes(command))
-            time.sleep(sleep_time)  # Small delay for driver processing
+        if not isinstance(command, list):
+            return None
+        if not self.is_connected():
+            print("Not connected to controller")
+            return None
 
-            return self.receive_response(buffer_size)
-        return None
+        with self.lock:
+            try:
+                self.socket.sendall(bytes(command))
+                time.sleep(sleep_time)
+                response = self.socket.recv(buffer_size)
+                if self.response_parser:
+                    response = self.response_parser(response)
+                return response
+            except socket.timeout:
+                print("Timeout while receiving response from controller")
+                return None
+            except socket.error as e:
+                print(f"Error during send/receive: {e}")
+                self.connected = False
+                if self.auto_reconnect:
+                    self.connect()
+                return None
+            except Exception as e:
+                print(f"Unexpected error during send/receive: {e}")
+                return None
 
     def __enter__(self):
         """Context manager entry."""
@@ -309,9 +327,108 @@ class MotorControl:
             'get_camera_acceleration': '0A0E',
             'save_camera_PID': '0A11',
             'load_camera_PID': '0A12',
+            
+            # === Configuration Commands Internal ===
+            #Technosoft_parameters
+            'get_cfg_Gear_Ratio': '0C10',
+            'set_cfg_Gear_Ratio': '0C11',
+            'get_cfg_Max_VDC': '0C12',
+            'set_cfg_Max_VDC': '0C13',
+            'get_cfg_Peak_Current': '0C14',
+            'set_cfg_Peak_Current': '0C15',
+            'get_cfg_slow_loop_sampling': '0C16',
+            'set_cfg_slow_loop_sampling': '0C17',
+            'set_cfg_micro_Steps': '0C45',
+            'get_cfg_micro_Steps': '0C46',
+            'set_cfg_steps_Per_Rev': '0C47',
+            'get_cfg_steps_Per_Rev': '0C48',
+            'set_cfg_close_loop_enable': '0CB7',
+            'get_cfg_close_loop_enable': '0CB8',
+            'set_cfg_Motor_Type': '0C22',
+            'get_cfg_Motor_Type': '0C23',
+            'set_cfg_Apos_Load_Type': '0C43',
+            'get_cfg_Apos_Load_Type': '0C44',
+            'set_cfg_Load_Encoder_Lines': '0C35',
+            'get_cfg_Load_Encoder_Lines': '0C36',
+            'get_cfg_Encoder_Lines': '0C08',
+            'set_cfg_Encoder_Lines': '0C09',
+            'set_encoder_Location': '0C4D',
+            'get_encoder_Location': '0C4E',
+
+            #Communication info
+            'get_cfg_PC_COM': '0C00',
+            'set_cfg_PC_COM': '0C01',
+            'get_cfg_TS_COM_TYPE': '0C02',
+            'set_cfg_TS_COM_TYPE': '0C03',
+            'set_cfg_Multi_Com': '0C9A',
+            'get_cfg_Multi_Com': '0C9B',
+            'set_cfg_Can_Baud_rate': '0C98',
+            'get_cfg_Can_Baud_rate': '0C99',
+            
+            #biss configuration
+            'set_Biss_Resolution': '0C65',
+            'get_Biss_Resolution': '0C66',
+            'set_Biss_Com': '0C67',
+            'get_Biss_Com': '0C68',
+            'set_Abs_Enc_Offset': '0C72',
+            'get_Abs_Enc_Offset': '0C73',
+            'set_Abs_Enc_Reverse': '0C74',
+            'get_Abs_Enc_Reverse': '0C75',
+
+            #limits motion parameters
+            'set_cfg_Max_Speed': '0C24',
+            'get_cfg_Max_Speed': '0C25',
+            'set_cfg_Min_Speed': '0C57',
+            'get_cfg_Min_Speed': '0C58',
+            'set_cfg_max_Acceleration': '0C41',
+            'get_cfg_max_Acceleration': '0C42',
+            'set_cfg_Min_Acceleration': '0CAD',
+            'get_cfg_Min_Acceleration': '0CAE',
+           
+            #IMU configuration
+            'get_cfg_Sensor_Type': '0C04',
+            'set_cfg_Sensor_Type': '0C05',   
+            'set_cfg_Reversed_IMU': '0C3F',
+            'get_cfg_Reversed_IMU': '0C40',
+            'set_cfg_Imu_Com': '0C59',
+            'get_cfg_Imu_Com': '0C5A',
+            'set_cfg_Imu_Baud_Rate': '0C5B',
+            'get_cfg_Imu_Baud_Rate': '0C5C',
+            'set_cfg_Imu_Freq': '0C5D',
+            'get_cfg_Imu_Freq': '0C5E',
+            
+            #General configuration
+            'set_cfg_Reversed_Axis': '0C2A',
+            'get_cfg_Reversed_Axis': '0C2B',
+            'set_cfg_System_Type': '0C3B',
+            'get_cfg_System_Type': '0C3C',
+            'get_cfg_Firmware_Version': '0C4A',
+            'set_cfg_Serial_Number': '0C2E',
+            'get_cfg_Serial_Number': '0C2F',     
+            'save_Serial_Number': '0C6F',
+            'cfg_save': '0C18',
+            'cfg_load': '0C19',
+            'cfg_restore_default': '0C34',
+            'set_cfg_Com_Axes_TS': '0C30',
+            'get_cfg_Com_Axes_TS': '0C31',
+            'set_cfg_Calc_Aspd': '0CA1',
+            'get_cfg_Calc_Aspd': '0CA2',
+            'set_cfg_Num_Of_Axes': '0C32',
+            'get_cfg_Num_Of_Axes': '0C33',
+
+            
+            # === IP communication Commands ===
+            'Set_Controller_IP': '070A',
+            'Get_Controller_IP': '070D',
+            'Set_Controller_Port': '070D',
+            'Get_Controller_Port': '070E',
+            'Set_Controller_Subnet_Mask': '071A',
+            'Get_Controller_Subnet_Mask': '071B',
+            'Save_IP': '0710',
         }   
     
     #=== BUILD THE PACKET FOR THE MOTOR ===
+
     def _build_packet(self, command_type: str, data_value: Union[None, float, int, list] = None,
                       data_format: str = 'none',axis_zero: bool = False, group_id: int = 0x00) -> list:
         """
@@ -471,7 +588,7 @@ class MotorControl:
         # Use last N bytes (where N is the expected size for the format)
         data_bytes = packet[-expected_size:]
         #    hex_list = [hex(b) for b in data_bytes]
-        #    print('response: ', hex_list)
+        #print('response: ', data_bytes)
         return struct.unpack(format_map[data_format], data_bytes)[0]
     
     def _calculate_checksum(self, packet: list) -> int:
@@ -488,6 +605,7 @@ class MotorControl:
         return sum(packet[2:]) % 256
     
     #=== SET COMMANDS FOR THE MOTOR ===
+
     def axis_on(self) -> bool:
         """
         Enable the motor.
@@ -723,6 +841,7 @@ class MotorControl:
         return False
     
     #=== SET LIMIT SWITCH COMMANDS FOR THE MOTOR ===
+
     def set_SWLS_positive(self, LS_positive: float) -> bool:
         """
         Set the SWLS positive.
@@ -851,6 +970,7 @@ class MotorControl:
         return False
 
     #=== SET CONFIGUTATIONS FOR THE MOTOR ===
+
     def set_CFG_pos_range(self, pos_range_type: int) -> bool:
         """
         Set the position range.
@@ -900,7 +1020,7 @@ class MotorControl:
             2: 0x02,
             3: 0x03,
         }
-        pos_range_type_dict = {    
+        pos_range_type_dict = {
             0: '-inf - +inf',
             1: '-360 - +360',
             2: '-180 - +180',
@@ -917,6 +1037,7 @@ class MotorControl:
         return False    
 
     #=== GET COMMANDS FOR THE MOTOR ===
+
     def get_status(self) -> Dict[str, Any]: # intern command
         """
         Get comprehensive motor status.
@@ -1022,6 +1143,7 @@ class MotorControl:
         return False
 
     #=== SIMULTANUSLY 2 AXES MOVEMENT ===
+
     def SSL_position(self, position_axis_1: float, position_axis_2: float, mode: int) -> bool:
         """
         Set the slave position.
@@ -1112,6 +1234,7 @@ class MotorControl:
         return axis1_pos, axis2_pos
     
     #=== SCANNER COMMANDS ===
+
     def SCN_set_yaw_min_angle(self, angle: float) -> bool:
         """
         Set the yaw minimum angle.
@@ -1284,6 +1407,7 @@ class MotorControl:
         return False
 
     # === Tracking Commands ===
+
     def set_camera_zoom(self, zoom: float) -> bool:
         """
         Set the zoom of the camera.
@@ -1612,3 +1736,1624 @@ class MotorControl:
             print(f"Axis {self.axis_number} camera PID loaded")
             return True
         return False  
+
+    #=== Configuration Commands Internal ===
+    #Parameters from Technosoft
+    def get_cfg_Gear_Ratio(self) -> float:
+        """
+        Get the gear ratio.
+        
+        Returns:
+            The gear ratio
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Gear_Ratio'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')       
+            print(f"Axis {self.axis_number} gear ratio: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Gear_Ratio(self, gear_ratio: float) -> bool:
+        """
+        Set the gear ratio.
+        
+        Args:
+            gear_ratio: Gear ratio
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Gear_Ratio'], gear_ratio, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} gear ratio set to {gear_ratio}")
+            return True
+        return False
+    
+    def get_cfg_Max_VDC(self) -> float:
+        """
+        Get the maximum voltage.
+        
+        Returns:
+            The maximum voltage
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Max_VDC'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')       
+            print(f"Axis {self.axis_number} maximum voltage: {response_data}")
+            return response_data
+        return None
+
+    def set_cfg_Max_VDC(self, max_voltage: float) -> bool:
+        """
+        Set the maximum voltage.
+        
+        Args:
+            max_voltage: Maximum voltage
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Max_VDC'], max_voltage, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} maximum voltage set to {max_voltage}")
+            return True
+        return False
+   
+    def get_cfg_Peak_Current(self) -> float:
+        """
+        Get the peak current.
+        
+        Returns:
+            The peak current
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Peak_Current'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')       
+            print(f"Axis {self.axis_number} peak current: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Peak_Current(self, peak_current: float) -> bool:
+        """
+        Set the peak current.
+        
+        Args:
+            peak_current: Peak current
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Peak_Current'], peak_current, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} peak current set to {peak_current}")
+            return True
+        return False
+
+    def get_cfg_slow_loop_sampling(self) -> float:
+        """
+        Get the slow loop sampling.
+        
+        Returns:
+            The slow loop sampling
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_slow_loop_sampling'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')       
+            print(f"Axis {self.axis_number} slow loop sampling: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_slow_loop_sampling(self, slow_loop_sampling: float) -> bool:
+        """
+        Set the slow loop sampling.
+        
+        Args:
+            slow_loop_sampling: Slow loop sampling
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_slow_loop_sampling'], slow_loop_sampling, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} slow loop sampling set to {slow_loop_sampling}")
+            return True
+        return False
+
+    def get_cfg_micro_Steps(self) -> int:
+        """
+        Get the micro steps.
+        
+        Returns:
+            The micro steps
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_micro_Steps'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:9], 'uint16')
+            print(f"Axis {self.axis_number} micro steps: {response_data}")
+            return response_data
+        return None
+
+    def set_cfg_micro_Steps(self, micro_steps: int) -> bool:
+        """
+        Set the micro steps.   
+        
+        Args:
+            micro_steps: Micro steps
+        """
+        data_format = 'uint16'
+        packet = self._build_packet(self.command_codes['set_cfg_micro_Steps'], micro_steps, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} micro steps set to {micro_steps}")
+            return True
+        return False
+
+    def get_cfg_steps_Per_Rev(self) -> int:
+        """
+        Get the steps per revolution.
+        
+        Returns:
+            The steps per revolution
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_steps_Per_Rev'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:9], 'uint16')
+            print(f"Axis {self.axis_number} steps per revolution: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_steps_Per_Rev(self, steps_per_rev: int) -> bool:
+        """
+        Set the steps per revolution.
+        
+        Args:
+            steps_per_rev: Steps per revolution
+        """
+        data_format = 'uint16'
+        packet = self._build_packet(self.command_codes['set_cfg_steps_Per_Rev'], steps_per_rev, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} steps per revolution set to {steps_per_rev}")
+            return True
+        return False
+
+    def get_cfg_close_loop_enable(self) -> bool:
+        """
+        Get the close loop enable.
+        
+        Returns:
+            The close loop enable
+        """
+        close_loop_enable_data = {
+            0: 0x00,
+            1: 0x01,
+        }
+        close_loop_enable_dict = {
+            0: 'Disabled',
+            1: 'Enabled',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['get_cfg_close_loop_enable'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} close loop enable: {close_loop_enable_dict[response_data]}")
+            return close_loop_enable_dict[response_data]
+        return None
+    
+    def set_cfg_close_loop_enable(self, close_loop_enable: bool) -> bool:
+        """
+        Set the close loop enable.
+        
+        Args:
+            close_loop_enable: Close loop enable
+        """
+        close_loop_enable_data = {
+            0: 0x00,
+            1: 0x01,
+        }
+        close_loop_enable_dict = {
+            0: 'Disabled',
+            1: 'Enabled',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_close_loop_enable'], close_loop_enable_data[close_loop_enable], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} close loop enable set to {close_loop_enable_dict[close_loop_enable]}")
+            return True
+        return False
+
+    def get_cfg_Motor_Type(self) -> int:
+        """
+        Get the motor type.
+        
+        Returns:
+            The motor type
+        """
+
+        motor_type_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+        }
+        motor_type_dict = {
+            0: 'Stepper',
+            1: 'BLDC',
+            2: 'DC',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_Motor_Type'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')       
+            print(f"Axis {self.axis_number} motor type: {motor_type_dict[response_data]}")
+            return motor_type_dict[response_data]
+        return None
+    
+    def set_cfg_Motor_Type(self, motor_type: int) -> bool:
+        """
+        Set the motor type.
+        
+        Args:
+            motor_type: Motor type
+        """
+        motor_type_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+        }
+        motor_type_dict = {
+            0: 'Stepper',
+            1: 'BLDC',
+            2: 'DC',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Motor_Type'], motor_type_data[motor_type], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} motor type set to {motor_type_dict[motor_type]}")
+            return True
+        return False
+
+    def get_cfg_Apos_Load_Type(self) -> str:
+        """
+        Get the Apos load type.
+        
+        Returns:
+            The Apos load type
+        """
+        apos_load_type_dict = {
+            0: 'Apos_load',
+            1: 'Apos_SSI',
+            2: 'TPOS',
+            3: 'Apos_Monitor',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_Apos_Load_Type'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} Apos load type: {apos_load_type_dict[response_data]}")
+            return apos_load_type_dict[response_data]
+        return None
+    
+    def set_cfg_Apos_Load_Type(self, apos_load_type: int) -> bool:
+        """
+        Set the Apos load type.
+        
+        Args:
+            apos_load_type: Apos load type
+        """
+        apos_load_type_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+        }
+        apos_load_type_dict = {
+            0: 'Apos_load',
+            1: 'Apos_SSI',
+            2: 'TPOS',
+            3: 'Apos_Monitor',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Apos_Load_Type'], apos_load_type_data[apos_load_type], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} Apos load type set to {apos_load_type_dict[apos_load_type]}")
+            return True
+        return False 
+        
+    def get_cfg_Load_Encoder_Lines(self) -> float:
+        """
+        Get the encoder lines of the load.
+        
+        Returns:
+            The encoder lines of the load
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Load_Encoder_Lines'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')
+            print(f"Axis {self.axis_number} encoder lines of the load: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Load_Encoder_Lines(self, load_encoder_lines: float) -> bool:
+        """
+        Set the encoder lines of the load.
+        
+        Args:
+            load_encoder_lines: Encoder lines of the load
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Load_Encoder_Lines'], load_encoder_lines, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} encoder lines of the load set to {load_encoder_lines}")
+            return True
+        return False
+
+    def get_cfg_Encoder_Lines(self) -> float:
+        """
+        Get the encoder lines.
+        
+        Returns:
+            The encoder lines
+        """
+
+        packet = self._build_packet(self.command_codes['get_cfg_Encoder_Lines'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')       
+            print(f"Axis {self.axis_number} encoder lines: {response_data}")
+            return response_data
+        return None
+
+    def set_cfg_Encoder_Lines(self, encoder_lines: float) -> bool:
+        """
+        Set the encoder lines.
+        
+        Args:
+            encoder_lines: Encoder lines
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Encoder_Lines'], encoder_lines, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} encoder lines set to {encoder_lines}")
+            return True
+        return False
+
+    def get_encoder_Location(self) -> str:
+        """
+        Get the encoder location.
+        
+        Returns:
+            The encoder location
+        """
+        encoder_location_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+        }
+        encoder_location_dict = {
+            0: 'None',
+            1: 'Motor',
+            2: 'Load',
+        }
+        packet = self._build_packet(self.command_codes['get_encoder_Location'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} encoder location: {encoder_location_dict[response_data]}")
+            return encoder_location_dict[response_data]
+        return None
+    
+    def set_encoder_Location(self, encoder_location: int) -> bool:
+        """
+        Set the encoder location.
+        
+        Args:
+            encoder_location: Encoder location
+        """
+        encoder_location_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+        }
+        encoder_location_dict = {
+            0: 'None',
+            1: 'Motor',
+            2: 'Load',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_encoder_Location'], encoder_location_data[encoder_location], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} encoder location set to {encoder_location_dict[encoder_location]}")
+            return True
+        return False
+
+    #Communication info
+    def get_cfp_PC_COM(self) -> bool:
+        """
+        Get from controller the PC communication type(Serial or Ethernet).
+        
+        Returns:
+            The PC communication type
+        """
+
+        pc_com_type_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+            4: 0x04,
+            5: 0x05,
+            6: 0x06,
+        }
+        pc_com_type_dict = {    
+            0: 'None',
+            1: 'Ethernet',
+            2: 'RS232',
+            3: 'RS422',
+            4: 'RS485',
+            5: 'TTL',
+            6: 'SPI',
+        }
+
+        packet = self._build_packet(self.command_codes['get_cfg_PC_COM'])
+        response = self.driver.send_and_receive(packet)
+
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')       
+            print(f"Axis {self.axis_number} PC communication type: {pc_com_type_dict[response_data]}")
+            return pc_com_type_dict[response_data]
+        return False 
+
+    def set_cfp_PC_COM(self, pc_com_type: int) -> bool:
+        """
+        Set the PC communication type.
+        
+        Args:
+            pc_com_type: PC communication type
+        """
+        pc_com_type_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+            4: 0x04,
+            5: 0x05,
+            6: 0x06,
+        }
+        pc_com_type_dict = {
+            0: 'None',
+            1: 'Ethernet',
+            2: 'RS232',
+            3: 'RS422',
+            4: 'RS485',
+            5: 'TTL',
+            6: 'SPI',
+        }
+        packet = self._build_packet(self.command_codes['set_cfg_PC_COM'], pc_com_type_data[pc_com_type])
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} PC communication type set to {pc_com_type_dict[pc_com_type]}")
+            return True
+        return False
+
+    def get_cfg_TS_COM_TYPE(self) -> str:
+        """
+        Get the TS communication type.
+        
+        Returns:
+            The TS communication type
+        """
+        TS_com_type_dict = {
+            1: 'Ethernet',
+            2: 'RS232',
+            9: 'CAN',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_TS_COM_TYPE'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} TS communication type: {TS_com_type_dict[response_data]}")
+            return TS_com_type_dict[response_data]
+        return None
+    
+    def set_cfg_TS_COM_TYPE(self, ts_com_type: int) -> bool:
+        """
+        Set the TS communication type.
+        
+        Args:
+            ts_com_type: TS communication type
+        """
+        TS_com_type_data = {
+            0: 0x01,
+            1: 0x02,
+            2: 0x09,
+        }
+        TS_com_type_dict = {
+            1: 'Ethernet',
+            2: 'RS232',
+            9: 'CAN',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_TS_COM_TYPE'], TS_com_type_data[ts_com_type], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} TS communication type set to {TS_com_type_dict[ts_com_type]}")
+            return True
+        return False
+
+    def get_cfg_Multi_Com(self) -> list:
+        """
+        Get the multi communication type.
+
+        Returns:
+            The list of activated communication types
+        """
+        multi_com_dict = {
+            0: 'Ethernet',
+            1: 'RS232',
+            2: 'RS422',
+            3: 'TTL',
+        }
+        data_format = 'raw'
+        packet = self._build_packet(self.command_codes['get_cfg_Multi_Com'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data([response[7]], data_format)
+            formatted_bin = format(response_data[0], '08b')
+            activated_communications = []
+            for idx, name in multi_com_dict.items():
+                if formatted_bin[-(idx + 1)] == '1':  # The rightmost bit is index 0
+                    activated_communications.append(name)
+            if activated_communications:
+                print(f"Axis {self.axis_number} activated communication types: {', '.join(activated_communications)}")
+                return activated_communications
+            else:
+                print(f"Axis {self.axis_number} has no activated communication types.")
+                return []
+        return None
+
+    def set_cfg_Multi_Com(self, multi_com: list) -> bool:
+        """
+        Set the multi communication type.
+
+        Args:
+            multi_com: List of four boolean values [Ethernet, RS232, RS422, TTL], each being True (on) or False (off)
+        """
+        if not isinstance(multi_com, list) or len(multi_com) != 4 or not all(isinstance(val, bool) for val in multi_com):
+            raise ValueError("multi_com must be a list of exactly 4 boolean values corresponding to [Ethernet, RS232, RS422, TTL].")
+
+        # Convert list of booleans to single byte
+        # [Ethernet, RS232, RS422, TTL] -> bits 0,1,2,3 for the low 4 bits
+        byte_val = 0
+        for idx, val in enumerate(multi_com):
+            if val:
+                byte_val |= (1 << idx)
+        data_format = 'uint8'
+        # Send as single byte in list to match how get_cfg_Multi_Com parses it
+        multi_com_data = [byte_val]
+        packet = self._build_packet(self.command_codes['set_cfg_Multi_Com'], multi_com_data, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            status_str_list = []
+            label_dict = {0: 'Ethernet', 1: 'RS232', 2: 'RS422', 3: 'TTL'}
+            for idx, enabled in enumerate(multi_com):
+                status_str_list.append(f"{label_dict[idx]}={'ON' if enabled else 'OFF'}")
+            print(f"Axis {self.axis_number} multi communication type set to: {', '.join(status_str_list)}")
+            return True
+        return False
+
+    def get_cfg_Can_Baud_rate(self) -> int:
+        """
+        Get the CAN baud rate.
+        
+        Returns:
+            The CAN baud rate
+        """ 
+        can_baud_rate_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+            4: 0x04,
+        }
+        can_baud_rate_dict = {
+            0: 'None',
+            1: '125K',
+            2: '250K',
+            3: '500K',
+            4: '1M',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_Can_Baud_rate'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} CAN baud rate: {can_baud_rate_dict[response_data]}")
+            return can_baud_rate_dict[response_data]
+        return None
+    
+    def set_cfg_Can_Baud_rate(self, can_baud_rate: int) -> bool:
+        """
+        Set the CAN baud rate.
+        
+        Args:
+            can_baud_rate: CAN baud rate
+        """
+        can_baud_rate_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+            4: 0x04,
+        }
+        can_baud_rate_dict = {
+            0: 'None',
+            1: '125K',
+            2: '250K',
+            3: '500K',
+            4: '1M',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Can_Baud_rate'], can_baud_rate_data[can_baud_rate], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} CAN baud rate set to {can_baud_rate_dict[can_baud_rate]}")
+            return True
+        return False
+
+    #biss configuration
+    def get_cfg_Biss_Resolution(self) -> int:
+        """
+        Get the BISS resolution.
+        
+        Returns:
+            The BISS resolution
+        """
+        packet = self._build_packet(self.command_codes['get_Biss_Resolution'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} BISS resolution: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Biss_Resolution(self, biss_resolution: int) -> bool:
+        """
+        Set the BISS resolution.
+        
+        Args:
+            biss_resolution: BISS resolution
+        """
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_Biss_Resolution'], biss_resolution, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} BISS resolution set to {biss_resolution}")
+            return True
+        return False
+
+    def get_cfg_Biss_Com(self) -> str:
+        """
+        Get the BISS communication type.
+        
+        Returns:
+            The BISS communication type
+        """
+        biss_com_dict = {
+            0: 'None',
+            1: 'SPI1',
+            2: 'SPI2',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['get_Biss_Com'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} BISS communication type: {biss_com_dict[response_data]}")
+            return biss_com_dict[response_data]
+        return None
+    
+    def set_cfg_Biss_Com(self, biss_com: int) -> bool:
+        """
+        Set the BISS communication type.
+        
+        Args:
+            biss_com: BISS communication type
+        """
+        biss_com_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+        }
+        biss_com_dict = {
+            0: 'None',
+            1: 'SPI1',
+            2: 'SPI2',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_Biss_Com'], biss_com_data[biss_com], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} BISS communication type set to {biss_com_dict[biss_com]}")
+            return True
+        return False
+
+    def get_cfg_Abs_Enc_Offset(self) -> float:
+        """
+        Get the absolute encoder offset.
+        
+        Returns:
+            The absolute encoder offset
+        """
+        packet = self._build_packet(self.command_codes['get_Abs_Enc_Offset'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')
+            print(f"Axis {self.axis_number} absolute encoder offset: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Abs_Enc_Offset(self, abs_enc_offset: float) -> bool:
+        """
+        Set the absolute encoder offset.
+        
+        Args:
+            abs_enc_offset: Absolute encoder offset
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_Abs_Enc_Offset'], abs_enc_offset, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} absolute encoder offset set to {abs_enc_offset}")
+            return True
+        return False
+
+    def get_cfg_Abs_Enc_Reverse(self) -> str:
+        """
+        Get the absolute encoder reverse.
+        
+        Returns:
+            The absolute encoder reverse (Yes/No)
+        """
+        abs_enc_reverse_dict = {
+            0: 'No',
+            1: 'Yes',
+        }
+        packet = self._build_packet(self.command_codes['get_Abs_Enc_Reverse'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} absolute encoder reverse: {abs_enc_reverse_dict[response_data]}")
+            return abs_enc_reverse_dict[response_data]
+        return None
+    
+    def set_cfg_Abs_Enc_Reverse(self, abs_enc_reverse: int) -> bool:
+        """
+        Set the absolute encoder reverse.
+        
+        Args:
+            abs_enc_reverse: Absolute encoder reverse
+        """
+        abs_enc_reverse_data = {
+            0: 0x00,
+            1: 0x01,
+        }
+        abs_enc_reverse_dict = {
+            0: 'No',
+            1: 'Yes',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_Abs_Enc_Reverse'], abs_enc_reverse_data[abs_enc_reverse], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} absolute encoder reverse set to {abs_enc_reverse_dict[abs_enc_reverse]}")
+            return True
+        return False
+
+    #limits motion parameters
+    def get_cfg_Max_Speed(self) -> float:
+        """
+        Get the maximum speed.
+        
+        Returns:
+            The maximum speed
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Max_Speed'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')       
+            print(f"Axis {self.axis_number} maximum speed: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Max_Speed(self, max_speed: float) -> bool:
+        """
+        Set the maximum speed.
+        
+        Args:
+            max_speed: Maximum speed
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Max_Speed'], max_speed, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} maximum speed set to {max_speed}")
+            return True
+        return False
+
+    def get_cfg_Min_Speed(self) -> float:
+        """
+        Get the minimum speed.
+        
+        Returns:
+            The minimum speed
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Min_Speed'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')
+            print(f"Axis {self.axis_number} minimum speed: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Min_Speed(self, min_speed: float) -> bool:
+        """
+        Set the minimum speed.
+        
+        Args:
+            min_speed: Minimum speed
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Min_Speed'], min_speed, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} minimum speed set to {min_speed}")
+            return True
+        return False
+
+    def get_cfg_max_Acceleration(self) -> float:
+        """
+        Get the maximum acceleration.
+        
+        Returns:    
+            The maximum acceleration
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_max_Acceleration'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:9], 'uint16')
+            print(f"Axis {self.axis_number} maximum acceleration: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_max_Acceleration(self, max_acceleration: float) -> bool:
+        """
+        Set the maximum acceleration.   
+        
+        Args:
+            max_acceleration: Maximum acceleration
+        """
+        data_format = 'uint16'
+        packet = self._build_packet(self.command_codes['set_cfg_max_Acceleration'], max_acceleration, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} maximum acceleration set to {max_acceleration}")
+            return True
+        return False
+
+    def get_cfg_Min_Acceleration(self) -> float: 
+        """
+        Get the minimum acceleration.
+        
+        Returns:
+            The minimum acceleration
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Min_Acceleration'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'float32')
+            print(f"Axis {self.axis_number} minimum acceleration: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Min_Acceleration(self, min_acceleration: float) -> bool:
+        """
+        Set the minimum acceleration.
+        
+        Args:
+            min_acceleration: Minimum acceleration
+        """
+        data_format = 'float32'
+        packet = self._build_packet(self.command_codes['set_cfg_Min_Acceleration'], min_acceleration, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} minimum acceleration set to {min_acceleration}")
+            return True
+        return False
+
+    #IMU configuration
+    def get_cfg_Sensor_Type(self) -> str:
+        """
+        Get the IMU type.
+        
+        Returns:
+            The IMU type
+        """
+        sensor_type_dict = {
+            0: 'None',
+            1: 'FOG',
+            2: 'VN_100',
+            3: 'VN_200',
+            4: 'VN_300',
+            5: 'Winner',
+            6: 'Compass',
+            7: 'Gladiator',
+            8: 'A.Navigation',
+        }
+        
+        packet = self._build_packet(self.command_codes['get_cfg_Sensor_Type'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data_sensor_type = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} Sensor type: {sensor_type_dict[response_data_sensor_type]}")
+            response_data_sensor_type = self._decode_data(response[4], 'uint8')
+            return sensor_type_dict[response_data_sensor_type]
+        return None
+    
+    def set_cfg_Sensor_Type(self, sensor_type: int) -> bool:
+        """
+        Set the Sensor type.
+        
+        Args:
+            sensor_type: Sensor type
+        """
+        sensor_type_dict = {
+            0: 'None',
+            1: 'FOG',
+            2: 'VN_100',
+            3: 'VN_200',
+            4: 'VN_300',
+            5: 'Winner',
+            6: 'Compass',
+            7: 'Gladiator',
+            8: 'A.Navigation',
+        }
+        
+
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Sensor_Type'], sensor_type, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} Sensor type set to {sensor_type_dict[sensor_type]}")
+            return True
+        return False
+
+    def get_cfg_reversed_IMU(self) -> bool:
+        """
+        Get the reversed IMU.
+        
+        Returns:
+            The reversed IMU
+        """
+        reversed_IMU_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+        }
+        reversed_IMU_dict = {
+            0: 'client',
+            1: 'base_imu',
+            2: 'load_imu',
+            3: 'mid_imu',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_Reversed_IMU'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} reversed IMU: {reversed_IMU_dict[response_data]}")
+            return reversed_IMU_dict[response_data]
+        return None
+    
+    def set_cfg_reversed_IMU(self, reversed_IMU: int) -> bool:
+        """
+        Set the reversed IMU.
+        
+        Args:
+            reversed_IMU: Reversed IMU
+        """
+        reversed_IMU_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+        }
+        reversed_IMU_dict = {
+            0: 'client',
+            1: 'base_imu',
+            2: 'load_imu',
+            3: 'mid_imu',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Reversed_IMU'], reversed_IMU_data[reversed_IMU], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} reversed IMU set to {reversed_IMU_dict[reversed_IMU]}")
+            return True
+        return False
+
+    def get_cfg_Imu_Com(self) -> str:
+        """
+        Get the IMU communication type.
+        
+        Returns:
+            The IMU communication type
+        """
+        imu_com_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+            4: 0x04,
+            5: 0x05,
+            6: 0x06,
+        }
+        imu_com_dict = {
+            0: 'None',
+            1: 'RS232_1',
+            2: 'RS232_2',
+            3: 'RS232_3',
+            4: 'RS485',
+            5: 'RS422',
+            6: 'TTL',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['get_cfg_Imu_Com'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} IMU communication type: {imu_com_dict[response_data]}")
+            return imu_com_dict[response_data]
+        return None
+    
+    def set_cfg_Imu_Com(self, imu_com: int) -> bool:
+        """
+        Set the IMU communication type.
+        
+        Args:
+            imu_com: IMU communication type
+        """
+        imu_com_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+            4: 0x04,
+            5: 0x05,
+            6: 0x06,
+        }    
+        imu_com_dict = {
+            0: 'None',
+            1: 'RS232_1',
+            2: 'RS232_2',
+            3: 'RS232_3',
+            4: 'RS485',
+            5: 'RS422',
+            6: 'TTL',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Imu_Com'], imu_com_data[imu_com], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} IMU communication type set to {imu_com_dict[imu_com]}")
+            return True
+        return False
+
+    def get_cfg_Imu_Baud_Rate(self) -> float:
+        """
+        Get the IMU baud rate.
+        
+        Returns:
+            The IMU baud rate
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Imu_Baud_Rate'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'uint32')
+            print(f"Axis {self.axis_number} IMU baud rate: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Imu_Baud_Rate(self, imu_baud_rate: int) -> bool:
+        """
+        Set the IMU baud rate.
+        
+        Args:
+            imu_baud_rate: IMU baud rate
+        """
+        data_format = 'uint32'
+        packet = self._build_packet(self.command_codes['set_cfg_Imu_Baud_Rate'], imu_baud_rate, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} IMU baud rate set to {imu_baud_rate}")
+            return True
+        return False
+
+    def get_cfg_Imu_Freq(self) -> float:
+        """
+        Get the IMU frequency.
+        
+        Returns:
+            The IMU frequency
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Imu_Freq'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:9], 'uint16')
+            print(f"Axis {self.axis_number} IMU frequency: {response_data}")
+            return response_data
+        return None
+     
+    def set_cfg_Imu_Freq(self, imu_freq: int) -> bool:
+        """
+        Set the IMU frequency.
+        
+        Args:
+            imu_freq: IMU frequency
+        """
+        data_format = 'uint16'
+        packet = self._build_packet(self.command_codes['set_cfg_Imu_Freq'], imu_freq, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} IMU frequency set to {imu_freq}")
+            return True
+        return False
+
+    #General configuration
+    def get_cfg_Reversed_Axis(self) -> str:
+        """
+        Get the reversed axis.
+        
+        Returns:
+            The reversed axis (Yes/No)
+        """
+        reversed_axis_dict = {
+            0: 'No',
+            1: 'Yes',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_Reversed_Axis'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} reversed axis: {reversed_axis_dict[response_data]}")
+            return reversed_axis_dict[response_data]
+        return None
+    
+    def set_cfg_Reversed_Axis(self, reversed_axis: int) -> bool:
+        """
+        Set the reversed axis.
+        
+        Args:
+            reversed_axis: Reversed axis (Yes/No)
+        """
+        reversed_axis_dict = {
+            0: 'No',
+            1: 'Yes',
+        }
+        reversed_axis_data = {
+            0: 0x00,
+            1: 0x01,
+        }
+        data_format = 'uint8'   
+        packet = self._build_packet(self.command_codes['set_cfg_Reversed_Axis'], reversed_axis_data[reversed_axis], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} reversed axis set to {reversed_axis_dict[reversed_axis]}")
+            return True
+        return False
+
+    def get_cfg_System_Type(self) -> str:
+        """
+        Get the system type.
+        
+        Returns:
+            The system type
+        """
+        system_type_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+        }
+        system_type_dict = {
+            0: 'manual',
+            1: 'stabilized',
+            2: 'tracker',
+            3: 'dual_gimbal',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_System_Type'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} system type: {system_type_dict[response_data]}")
+            return system_type_dict[response_data]
+        return None
+    
+    def set_cfg_System_Type(self, system_type: int) -> bool:
+        """
+        Set the system type.
+        
+        Args:
+            system_type: System type
+        """
+        system_type_data = {
+            0: 0x00,
+            1: 0x01,
+            2: 0x02,
+            3: 0x03,
+        }
+        system_type_dict = {
+            0: 'manual',
+            1: 'stabilized',
+            2: 'tracker',
+            3: 'dual_gimbal',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_System_Type'], system_type_data[system_type], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} system type set to {system_type_dict[system_type]}")
+            return True
+        return False
+
+    def get_cfg_firmware_Version(self) -> str: #special case for firmware version get string
+        """
+        Get the firmware version.
+        
+        Returns:
+            The firmware version
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Firmware_Version'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            fw = response[7:27].decode('utf-8', errors='ignore')            
+            print(f"Axis {self.axis_number} firmware version: {fw}")
+            return fw
+        return None
+
+    def get_cfg_Serial_Number(self) -> int:
+        """
+        Get the serial number.
+        
+        Returns:
+            The serial number
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Serial_Number'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'uint32')       
+            print(f"Axis {self.axis_number} serial number: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Serial_Number(self, serial_number: str) -> bool:
+        """
+        Set the serial number.
+        
+        Args:
+            serial_number: Serial number
+        """
+        data_format = 'uint32'
+        packet = self._build_packet(self.command_codes['set_cfg_Serial_Number'], serial_number, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} serial number set to {serial_number}")
+            return True
+        return False
+
+    def save_cfg_Serial_Number(self) -> bool:
+        """
+        Save the serial number.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        packet = self._build_packet(self.command_codes['save_cfg_Serial_Number'])
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} serial number saved")
+            return True
+        return False
+
+    def cfg_save(self) -> bool:
+        """
+        Save the configuration.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        packet = self._build_packet(self.command_codes['cfg_save'])
+        response = self.driver.send_and_receive(packet, sleep_time=3)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} configuration saved")
+            return True
+        return False
+    
+    def cfg_load(self) -> bool:
+        """
+        Load the configuration.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        packet = self._build_packet(self.command_codes['cfg_load'])
+        response = self.driver.send_and_receive(packet, sleep_time=1)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} configuration loaded")
+            return True
+        return False
+
+    def cfg_restore_default(self) -> bool:
+        """
+        Restore the default configuration.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        packet = self._build_packet(self.command_codes['cfg_restore_default'])
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} configuration restored to default")
+            return True
+        return False
+    
+    def get_cfg_Com_Axes_TS(self) -> int:
+        """
+        Get the communication type of the axes to the TS.
+        
+        Returns:
+            The communication type of the axes to the TS
+        """
+        packet = self._build_packet(self.command_codes['get_cfg_Com_Axes_TS'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} communication type of the axes to the TS: {response_data}")
+            return response_data
+        return None
+    
+    def set_cfg_Com_Axes_TS(self, com_axes_ts: int) -> bool:
+        """
+        Set the communication type of the axes to the TS.
+        
+        Args:
+            com_axes_ts: Communication type of the axes to the TS
+        """
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Com_Axes_TS'], com_axes_ts, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} communication type of the axes to the TS set to {com_axes_ts}")
+            return True
+        return False
+
+    def get_cfg_Calc_Aspd(self) -> str:
+        """
+        Get the calculated acceleration.
+        
+        Returns:
+            The calculated acceleration
+        """
+        calc_aspd_dict = {
+            0: 'Disabled',
+            1: 'Enabled',
+        }
+        packet = self._build_packet(self.command_codes['get_cfg_Calc_Aspd'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7], 'uint8')
+            print(f"Axis {self.axis_number} calculated acceleration: {calc_aspd_dict[response_data]}")
+            return calc_aspd_dict[response_data]    
+        return None
+    
+    def set_cfg_Calc_Aspd(self, calc_aspd: int) -> bool:
+        """
+        Set the calculated acceleration.
+        
+        Args:
+            calc_aspd: Calculated acceleration (Disabled/Enabled)
+        """
+        calc_aspd_data = {
+            0: 0x00,
+            1: 0x01,
+        }
+        calc_aspd_dict = {
+            0: 'Disabled',
+            1: 'Enabled',
+        }
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['set_cfg_Calc_Aspd'], calc_aspd_data[calc_aspd], data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} calculated acceleration set to {calc_aspd_dict[calc_aspd]}")
+            return True
+        return False
+
+    def get_cfg_Num_Of_Axes(self) -> int:
+        """
+        Get the number of axes.
+        
+        Returns:
+            The number of axes
+        """
+        num_of_axes_dict = {
+            0: 'Pan',
+            1: 'Tilt',
+            2: 'Roll',
+            3: 'Pan_2_X',
+            4: 'Tilt_2_Y',
+            5: 'Roll_2_Z',
+        }
+        data_format = 'raw'
+        packet = self._build_packet(self.command_codes['get_cfg_Num_Of_Axes'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data([response[7]], data_format)
+            formatted_bin = format(response_data[0], '08b')
+            num_of_axes = []
+            for idx, name in num_of_axes_dict.items():
+                if formatted_bin[-(idx + 1)] == '1':  # The rightmost bit is index 0
+                    num_of_axes.append(name)
+            if num_of_axes:
+                print(f"Axis {self.axis_number} number of axes: {', '.join(num_of_axes)}")
+                return num_of_axes
+            else:
+                print(f"Axis {self.axis_number} has no number of axes.")
+                return []
+        return None
+    
+    def set_cfg_Num_Of_Axes(self, num_of_axes: list) -> bool:
+        """
+        Set the number of axes.
+
+        Args:
+            num_of_axes: List of six boolean values [Pan, Tilt, Roll, Pan_2_X, Tilt_2_Y, Roll_2_Z],
+                each being True (on) or False (off)
+        """
+        if not isinstance(num_of_axes, list) or len(num_of_axes) != 6 or not all(isinstance(val, bool) for val in num_of_axes):
+            raise ValueError("num_of_axes must be a list of exactly 6 booleans corresponding to [Pan, Tilt, Roll, Pan_2_X, Tilt_2_Y, Roll_2_Z].")
+
+        # Convert list of booleans to single byte
+        # [Pan, Tilt, Roll, Pan_2_X, Tilt_2_Y, Roll_2_Z] -> bits 0,1,2,3,4,5 for the low 6 bits
+        byte_val = 0
+        for idx, val in enumerate(num_of_axes):
+            if val:
+                byte_val |= (1 << idx)
+        data_format = 'uint8'
+        # Send as single byte in list to match how get_cfg_Num_Of_Axes parses it
+        num_of_axes_data = [byte_val]
+        packet = self._build_packet(self.command_codes['set_cfg_Num_Of_Axes'], num_of_axes_data, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            status_str_list = []
+            label_dict = {0: 'Pan', 1: 'Tilt', 2: 'Roll', 3: 'Pan_2_X', 4: 'Tilt_2_Y', 5: 'Roll_2_Z'}
+            for idx, enabled in enumerate(num_of_axes):
+                status_str_list.append(f"{label_dict[idx]}={'ON' if enabled else 'OFF'}")
+            print(f"Axis {self.axis_number} number of axes set to: {', '.join(status_str_list)}")
+            return True
+        return False
+    
+    # === IP communication Commands ===
+
+    def GetControllerIP(self) -> str:
+        """
+        Get the controller IP.
+        
+        Returns:
+            The controller IP
+        """
+        packet = self._build_packet(self.command_codes['Get_Controller_IP'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'raw')
+            print(f"Axis {self.axis_number} controller IP: {response_data}")
+            return response_data
+        return None
+    
+    def SetControllerIP(self, controller_ip: list) -> bool:
+        """
+        Set the controller IP.
+        
+        Args:
+            controller_ip: Controller IP
+        """
+        #hex_controller_ip = [f"{x:02x}" for x in controller_ip]
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['Set_Controller_IP'], controller_ip, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} controller IP set to {controller_ip}")
+            return True
+        return False
+
+    def GetControllerPort(self) -> int:
+        """
+        Get the controller port.
+        
+        Returns:
+            The controller port
+        """
+        packet = self._build_packet(self.command_codes['Get_Controller_Port'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:9], 'uint16')
+            print(f"Axis {self.axis_number} controller port: {response_data}")
+            return response_data
+        return None
+    
+    def SetControllerPort(self, controller_port: int) -> bool:
+        """
+        Set the controller port.
+        
+        Args:
+            controller_port: Controller port
+        """
+        data_format = 'uint16'
+        packet = self._build_packet(self.command_codes['Set_Controller_Port'], controller_port, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} controller port set to {controller_port}")
+            return True
+        return False
+
+    def GetControllerSubnetMask(self) -> str:
+        """
+        Get the controller subnet mask.
+        
+        Returns:
+            The controller subnet mask
+        """
+        packet = self._build_packet(self.command_codes['Get_Controller_Subnet_Mask'])
+        response = self.driver.send_and_receive(packet)
+        if response:
+            response_data = self._decode_data(response[7:11], 'raw')
+            print(f"Axis {self.axis_number} controller subnet mask: {response_data}")
+            return response_data
+        return None
+    
+    def Set_Controller_Subnet_Mask(self, controller_subnet_mask: str) -> bool:
+        """
+        Set the controller subnet mask.
+        
+        Args:
+            controller_subnet_mask: Controller subnet mask
+        """
+        data_format = 'uint8'
+        packet = self._build_packet(self.command_codes['Set_Controller_Subnet_Mask'], controller_subnet_mask, data_format)
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} controller subnet mask set to {controller_subnet_mask}")
+            return True
+        return False
+
+    def SaveIP(self) -> bool:
+        """
+        Save the IP.
+        
+        Returns:
+            The IP
+        """
+        packet = self._build_packet(self.command_codes['Save_IP'])
+        response = self.driver.send_and_receive(packet)
+        if response == self.Ack_response:
+            print(f"Axis {self.axis_number} IP saved")
+            return True
+        return False 
